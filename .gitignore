@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.turbo/
+.secrets/
+.env*
+*.tsbuildinfo
+coverage/
+test-results/
+packages/db/src/generated/.verify-db.ts
