@@ -95,7 +95,7 @@ describe('[T1-G4] Tier 1 + table + multilingual links against fixture-sites/hub'
 
 describe('[T1-G4] SSRF guard on real DNS: loopback fixture refused unless ALLOW_LOCAL_FIXTURE_HOSTS', () => {
   it('refuses the allowlisted-but-loopback host when non-public addresses are not allowed', async () => {
-    const strict = await openHarness({ allowNonPublic: false });
+    const strict = await openHarness({ exemptFixtureAddresses: false });
     try {
       const report = await strict.crawl(['/hub']);
       expect(report.outcomes).toEqual([

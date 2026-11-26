@@ -1,7 +1,8 @@
 import type { DiscoveredLink } from '@prometheus/contracts';
-import { type ChildNode, type Element, isTag, isText } from 'domhandler';
+import { type ChildNode, type Element, isTag, isText, Text } from 'domhandler';
 import { parseDocument } from 'htmlparser2';
 import type { DomainAllowlist } from './allowlist.js';
+import { CRAWL_POLICY } from './policy.js';
 import { looksLikePdfUrl, normalizeUrl, parseHttpUrl } from './url.js';
 
 /**
@@ -99,10 +100,36 @@ function collapse(text: string): string {
   return text.replace(/\s+/g, ' ');
 }
 
+/** Concatenated text of a subtree (iterative: safe on arbitrarily deep DOMs). */
 function rawText(node: ChildNode): string {
-  if (isText(node)) return node.data;
-  if (isTag(node)) return node.children.map(rawText).join('');
-  return '';
+  let out = '';
+  const stack: ChildNode[] = [node];
+  for (let n = stack.pop(); n !== undefined; n = stack.pop()) {
+    if (isText(n)) out += n.data;
+    else if (isTag(n))
+      for (let i = n.children.length - 1; i >= 0; i -= 1) stack.push(n.children[i] as ChildNode);
+  }
+  return out;
+}
+
+/**
+ * Stack-safety bound for the recursive density/rendering passes: any element nested deeper than `maxDepth`
+ * has its subtree replaced by one text node with the same text. Iterative, so hostile 10k-deep pages
+ * cannot overflow the call stack; content is kept, only structure below the bound is flattened.
+ */
+function capDomDepth(roots: readonly ChildNode[], maxDepth: number): void {
+  const stack: Array<{ node: ChildNode; depth: number }> = roots.map((node) => ({ node, depth: 0 }));
+  for (let item = stack.pop(); item !== undefined; item = stack.pop()) {
+    const { node, depth } = item;
+    if (!isTag(node)) continue;
+    if (depth >= maxDepth && node.children.some(isTag)) {
+      const flat = new Text(rawText(node));
+      flat.parent = node;
+      node.children = [flat];
+      continue;
+    }
+    for (const child of node.children) stack.push({ node: child, depth: depth + 1 });
+  }
 }
 
 interface Density {
@@ -161,26 +188,24 @@ function selectContentRoot(body: Element): Element {
   }
 }
 
-function findFirst(nodes: readonly ChildNode[], predicate: (el: Element) => boolean): Element | undefined {
-  for (const node of nodes) {
-    if (!isTag(node)) continue;
-    if (predicate(node)) return node;
-    const deep = findFirst(node.children, predicate);
-    if (deep) return deep;
+/** Document-order (pre-order) element walk; iterative so it is safe on any depth. */
+function* elements(nodes: readonly ChildNode[]): Generator<Element> {
+  const stack: ChildNode[] = [...nodes].reverse();
+  for (let n = stack.pop(); n !== undefined; n = stack.pop()) {
+    if (!isTag(n)) continue;
+    yield n;
+    for (let i = n.children.length - 1; i >= 0; i -= 1) stack.push(n.children[i] as ChildNode);
   }
+}
+
+function findFirst(nodes: readonly ChildNode[], predicate: (el: Element) => boolean): Element | undefined {
+  for (const el of elements(nodes)) if (predicate(el)) return el;
   return undefined;
 }
 
-function findAll(
-  nodes: readonly ChildNode[],
-  predicate: (el: Element) => boolean,
-  out: Element[] = [],
-): Element[] {
-  for (const node of nodes) {
-    if (!isTag(node)) continue;
-    if (predicate(node)) out.push(node);
-    findAll(node.children, predicate, out);
-  }
+function findAll(nodes: readonly ChildNode[], predicate: (el: Element) => boolean): Element[] {
+  const out: Element[] = [];
+  for (const el of elements(nodes)) if (predicate(el)) out.push(el);
   return out;
 }
 
@@ -407,6 +432,7 @@ export function extractHtml(
   const base = (baseHref !== undefined ? parseHttpUrl(baseHref, finalUrl)?.href : undefined) ?? finalUrl;
   const links = harvestLinks(doc.children, base, allowlist, normalizeUrl(finalUrl));
 
+  capDomDepth(doc.children, CRAWL_POLICY.maxDomDepth);
   const renderer = new Renderer();
   // Fragments without <body> render every top-level node.
   const marked = body

@@ -27,8 +27,9 @@ const systemResolver: Resolver = (hostname) =>
 
 /**
  * Per-request / per-hop policy: (1) host must be on the official allowlist, (2) every resolved address must
- * be public unless local fixture hosts are explicitly allowed. `connectLookup` re-applies (2) at socket
- * connect time so a DNS answer that changes between check and connect (rebinding) is still refused.
+ * be public unless the hostname is an explicitly exempted local fixture host. `connectLookup` re-applies
+ * (2) at socket connect time so a DNS answer that changes between check and connect (rebinding) is still
+ * refused. IP-literal URLs never reach a lookup, so the pre-check (deterministic, no DNS) is final for them.
  */
 export class RequestGuard {
   constructor(
@@ -46,7 +47,7 @@ export class RequestGuard {
   async checkAddressOnly(url: URL): Promise<GuardDecision> {
     const host = url.hostname.replace(/^\[|\]$/g, '');
     if (isIP(host) !== 0)
-      return isAddressPermitted(this.addressPolicy, host) ? 'OK' : 'BLOCKED_PRIVATE_ADDRESS';
+      return isAddressPermitted(this.addressPolicy, host, host) ? 'OK' : 'BLOCKED_PRIVATE_ADDRESS';
     let addresses: readonly string[];
     try {
       addresses = await this.resolve(host);
@@ -54,7 +55,7 @@ export class RequestGuard {
       return 'DNS_FAILURE';
     }
     if (addresses.length === 0) return 'DNS_FAILURE';
-    return addresses.every((a) => isAddressPermitted(this.addressPolicy, a))
+    return addresses.every((a) => isAddressPermitted(this.addressPolicy, a, host))
       ? 'OK'
       : 'BLOCKED_PRIVATE_ADDRESS';
   }
@@ -68,7 +69,7 @@ export class RequestGuard {
       }
       if (
         addresses.length === 0 ||
-        !addresses.every((a) => isAddressPermitted(this.addressPolicy, a.address))
+        !addresses.every((a) => isAddressPermitted(this.addressPolicy, a.address, hostname))
       ) {
         callback(new BlockedAddressError(hostname), '', 0);
         return;

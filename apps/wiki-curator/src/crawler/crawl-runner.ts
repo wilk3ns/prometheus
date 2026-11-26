@@ -13,7 +13,10 @@ import { normalizeUrl, parseHttpUrl } from './url.js';
  *  - every fetch attempt (including 404s and refusals) counts towards max_pages;
  *  - URLs are deduplicated on their normalised form (requested and final URL);
  *  - only harvested hrefs are followed: selector output is filtered to the harvested set, so a selector
- *    (deterministic now, model-backed in T2) can reorder or drop links but never invent one.
+ *    (deterministic now, model-backed in T2) can reorder or drop links but never invent one;
+ *  - failure isolation: any unexpected error while CAPTURING one URL (fetch, render, extraction) becomes a
+ *    `NOT_FETCHED / CAPTURE_FAILED` outcome and the crawl continues. Persistence errors (database / blob
+ *    store) are systemic, not page-specific, and propagate to the caller, which isolates per target.
  */
 
 export interface CrawlRunnerDeps {
@@ -98,7 +101,17 @@ export class CrawlRunner {
     depth: number,
     target: CrawlTargetRow,
   ): Promise<{ result: UrlCrawlOutcome; links: readonly DiscoveredLink[]; finalUrl: string | undefined }> {
-    const capture = await capturePage(new URL(url), this.deps.capture);
+    let capture;
+    try {
+      capture = await capturePage(new URL(url), this.deps.capture);
+    } catch (error) {
+      const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      return {
+        result: { status: 'NOT_FETCHED', url, depth, reason: 'CAPTURE_FAILED', detail: detail.slice(0, 500) },
+        links: [],
+        finalUrl: undefined,
+      };
+    }
     if (capture.kind === 'NOT_FETCHED') {
       return {
         result: { status: 'NOT_FETCHED', url, depth, reason: capture.reason, detail: capture.detail },

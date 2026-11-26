@@ -2,6 +2,7 @@
 import { parseArgs } from 'node:util';
 import { loadWikiCuratorConfig } from '@prometheus/config';
 import { openCrawlSession, openRuntime } from './bootstrap.js';
+import { runCrawlBatch } from './ops/crawl-batch.js';
 import { applySeed, readSeedFile } from './seed/seed.js';
 
 const USAGE = `usage:
@@ -26,8 +27,12 @@ async function main(argv: readonly string[]): Promise<void> {
 
   if (command === 'seed') {
     if (!values.file) throw new UsageError('seed requires --file');
-    const seed = await readSeedFile(values.file); // validate before touching the database
-    const runtime = await openRuntime(loadWikiCuratorConfig(process.env));
+    const config = loadWikiCuratorConfig(process.env);
+    // validate (same port policy as the crawler) before touching the database
+    const seed = await readSeedFile(values.file, {
+      nonDefaultPortHosts: new Set(config.crawler.localFixtureHosts),
+    });
+    const runtime = await openRuntime(config);
     try {
       const result = await applySeed(runtime.repo, seed, runtime.ids);
       console.log(JSON.stringify({ command: 'seed', file: values.file, ...result }));
@@ -43,13 +48,21 @@ async function main(argv: readonly string[]): Promise<void> {
     const runtime = await openRuntime(loadWikiCuratorConfig(process.env));
     const session = await openCrawlSession(runtime);
     try {
-      const targets = values.target
-        ? [await runtime.repo.findTargetByKey(values.target)]
-        : await runtime.repo.listActiveTargets();
-      for (const target of targets) {
-        if (!target) throw new UsageError(`unknown target_key ${values.target ?? ''}`);
-        console.log(JSON.stringify(await session.runner.crawl(target)));
+      let targets;
+      if (values.target) {
+        const one = await runtime.repo.findTargetByKey(values.target);
+        if (!one) throw new UsageError(`unknown target_key ${values.target}`);
+        targets = [one];
+      } else {
+        targets = await runtime.repo.listActiveTargets();
       }
+      const summary = await runCrawlBatch(
+        targets,
+        (t) => session.runner.crawl(t),
+        (line) => console.log(JSON.stringify(line)),
+      );
+      console.log(JSON.stringify({ command: 'crawl', ...summary }));
+      if (summary.failed > 0) process.exitCode = 1;
     } finally {
       await session.close();
       await runtime.close();

@@ -18,11 +18,13 @@ export const ids = () => createUuidV7Generator(clock);
 export class MemoryBlobStore implements BlobStorePort {
   readonly bucket = 'wiki-snapshots';
   readonly objects = new Map<string, Uint8Array>();
+  readonly types = new Map<string, string>();
   puts = 0;
-  putIfAbsent(key: string, bytes: Uint8Array): Promise<PutOutcome> {
+  putIfAbsent(key: string, bytes: Uint8Array, contentType: string): Promise<PutOutcome> {
     this.puts += 1;
     if (this.objects.has(key)) return Promise.resolve('EXISTS');
     this.objects.set(key, new Uint8Array(bytes));
+    this.types.set(key, contentType);
     return Promise.resolve('CREATED');
   }
   get(key: string): Promise<Uint8Array | undefined> {

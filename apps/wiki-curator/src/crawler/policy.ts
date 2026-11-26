@@ -11,6 +11,13 @@ export const CRAWL_POLICY = {
   /** Tier 2: `domcontentloaded` navigation budget, then `networkidle` capped at 10 s. */
   tier2NavigationTimeoutMs: 15_000,
   tier2NetworkIdleCapMs: 10_000,
+  /** Tier 2: one wall-clock budget per render (navigation hops + networkidle + serialisation). */
+  tier2RenderDeadlineMs: 25_000,
+  /** PDF extraction bounds (page count fits wiki.source_snapshot.page_count smallint). */
+  pdfMaxPages: 2_000,
+  pdfTimeoutMs: 60_000,
+  /** DOM nesting beyond this depth is flattened to text before extraction (stack-safety bound). */
+  maxDomDepth: 256,
   /** Absolute BFS bounds from the `wiki.crawl_target` CHECK constraints. */
   maxDepth: 3,
   maxPages: 100,

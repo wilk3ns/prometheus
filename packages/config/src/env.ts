@@ -24,6 +24,20 @@ const LocalEnv = z.object({
   S3_ACCESS_KEY_ID: z.string().min(1),
   WIKI_SNAPSHOT_BUCKET: z.string().min(3).default('wiki-snapshots'),
   ALLOW_LOCAL_FIXTURE_HOSTS: BoolFlag.default(false),
+  // Hostnames the local exemption applies to (comma-separated). Only these may resolve to non-public
+  // addresses or use non-default ports; every other host (incl. live official sites) stays strict.
+  LOCAL_FIXTURE_HOSTS: z
+    .string()
+    .default('localhost')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((h) => h.trim().toLowerCase())
+        .filter((h) => h !== ''),
+    )
+    .pipe(
+      z.array(z.string().regex(/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/, { message: 'must be hostnames' })).min(1),
+    ),
 });
 
 const AzureEnv = z.object({
@@ -42,7 +56,12 @@ const Env = z.discriminatedUnion('INFRA_PROFILE', [LocalEnv, AzureEnv]);
 
 interface CommonConfig {
   readonly postgres: { readonly host: string; readonly port: number; readonly database: string };
-  readonly crawler: { readonly userAgent: string; readonly allowLocalFixtureHosts: boolean };
+  readonly crawler: {
+    readonly userAgent: string;
+    readonly allowLocalFixtureHosts: boolean;
+    /** Exempted fixture hostnames; always empty unless ALLOW_LOCAL_FIXTURE_HOSTS=true in the local profile. */
+    readonly localFixtureHosts: readonly string[];
+  };
   readonly snapshotBucket: string;
   readonly vaultDir: string | undefined;
   readonly liveCrawl: boolean;
@@ -82,6 +101,8 @@ export function loadWikiCuratorConfig(env: Readonly<Record<string, string | unde
     crawler: {
       userAgent: e.CRAWLER_USER_AGENT,
       allowLocalFixtureHosts: e.INFRA_PROFILE === 'local' ? e.ALLOW_LOCAL_FIXTURE_HOSTS : false,
+      localFixtureHosts:
+        e.INFRA_PROFILE === 'local' && e.ALLOW_LOCAL_FIXTURE_HOSTS ? e.LOCAL_FIXTURE_HOSTS : [],
     },
     snapshotBucket: e.WIKI_SNAPSHOT_BUCKET,
     vaultDir: e.PROMETHEUS_VAULT_DIR,

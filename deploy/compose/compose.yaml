@@ -1,4 +1,5 @@
 # Local-only development stack. Zero cloud credentials; every password below is a dev default.
+# All host ports bind to 127.0.0.1 only (Valkey has no auth; the dev passwords are public).
 name: prometheus
 
 services:
@@ -9,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${PG_ADMIN_PASSWORD:-postgres_dev}
       POSTGRES_DB: prometheus
     ports:
-      - '${PG_PORT:-5432}:5432'
+      - '127.0.0.1:${PG_PORT:-5432}:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -21,7 +22,7 @@ services:
   valkey:
     image: valkey/valkey:8-alpine
     ports:
-      - '${VALKEY_PORT:-6379}:6379'
+      - '127.0.0.1:${VALKEY_PORT:-6379}:6379'
     healthcheck:
       test: ['CMD', 'valkey-cli', 'ping']
       interval: 2s
@@ -37,8 +38,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio-dev}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio-dev-secret}
     ports:
-      - '${MINIO_PORT:-9000}:9000'
-      - '${MINIO_CONSOLE_PORT:-9001}:9001'
+      - '127.0.0.1:${MINIO_PORT:-9000}:9000'
+      - '127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001'
     volumes:
       - miniodata:/data
     healthcheck:
@@ -74,7 +75,7 @@ services:
     environment:
       PORT: '8088'
     ports:
-      - '${FIXTURE_SITES_PORT:-8088}:8088'
+      - '127.0.0.1:${FIXTURE_SITES_PORT:-8088}:8088'
     volumes:
       - ./fixture-sites:/srv:ro
     healthcheck:

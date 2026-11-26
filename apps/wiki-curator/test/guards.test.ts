@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isNonPublicAddress } from '../src/crawler/address-policy.js';
+import { isNonPublicAddress, STRICT_ADDRESS_POLICY } from '../src/crawler/address-policy.js';
 import { DomainAllowlist } from '../src/crawler/allowlist.js';
 import { RequestGuard } from '../src/crawler/request-guard.js';
 import { normalizeUrl, parseHttpUrl } from '../src/crawler/url.js';
@@ -33,6 +33,18 @@ describe('[T1-G4] allowlist matcher (rule 1)', () => {
     expect(allowlist.match('127.0.0.1')).toBeUndefined();
     expect(allowlist.allows(new URL('ftp://pw.edu.pl/x'))).toBe(false);
   });
+
+  it('[LOW-5] only default ports, except explicitly exempted local fixture hosts', () => {
+    expect(allowlist.allows(new URL('https://pw.edu.pl:443/x'))).toBe(true);
+    expect(allowlist.allows(new URL('http://pw.edu.pl:80/x'))).toBe(true);
+    expect(allowlist.allows(new URL('https://pw.edu.pl:8443/x'))).toBe(false);
+    expect(allowlist.allows(new URL('http://pw.edu.pl:6379/x'))).toBe(false);
+    const local = new DomainAllowlist([fixtureAllowlistEntry('localhost')], {
+      nonDefaultPortHosts: new Set(['localhost']),
+    });
+    expect(local.allows(new URL('http://localhost:8088/hub'))).toBe(true);
+    expect(allowlist.allows(new URL('http://www.pw.edu.pl:8088/'))).toBe(false);
+  });
 });
 
 describe('[T1-G4] SSRF address policy (rule 1)', () => {
@@ -55,6 +67,22 @@ describe('[T1-G4] SSRF address policy (rule 1)', () => {
     '::ffff:169.254.169.254',
     '[::1]',
     'not-an-ip',
+    // [MEDIUM IPv6] transition / translation prefixes that can carry an internal IPv4
+    '2002:7f00:1::1', // 6to4 -> 127.0.0.1
+    '2002:a9fe:a9fe::1', // 6to4 -> 169.254.169.254
+    '64:ff9b::7f00:1', // NAT64 WKP -> 127.0.0.1
+    '64:ff9b::a9fe:a9fe', // NAT64 WKP -> 169.254.169.254
+    '64:ff9b::808:808', // NAT64 WKP, even with a public IPv4: blocked outright
+    '64:ff9b:1::1', // local-use NAT64
+    '::ffff:0:7f00:1', // IPv4-translated (SIIT)
+    '::ffff:0:a9fe:a9fe',
+    '2001:0:4136:e378:8000:63bf:3fff:fdd2', // Teredo
+    '::7f00:1', // deprecated IPv4-compatible
+    '::127.0.0.1',
+    'fec0::1', // site-local
+    '100::1', // discard-only
+    '2001:db8::1', // documentation
+    '192.0.2.10', // TEST-NET-1
   ])('blocks %s', (ip) => {
     expect(isNonPublicAddress(ip)).toBe(true);
   });
@@ -67,30 +95,37 @@ describe('[T1-G4] SSRF address policy (rule 1)', () => {
   );
 
   it('checks RESOLVED addresses: an allowlisted name pointing at a private IP is blocked', async () => {
-    const rebinding = new RequestGuard(allowlist, { allowNonPublic: false }, () =>
+    const rebinding = new RequestGuard(allowlist, STRICT_ADDRESS_POLICY, () =>
       Promise.resolve(['93.184.216.34', '10.0.0.5']),
     );
     expect(await rebinding.check(new URL('https://www.pw.edu.pl/'))).toBe('BLOCKED_PRIVATE_ADDRESS');
-    const publicOnly = new RequestGuard(allowlist, { allowNonPublic: false }, () =>
+    const publicOnly = new RequestGuard(allowlist, STRICT_ADDRESS_POLICY, () =>
       Promise.resolve(['93.184.216.34']),
     );
     expect(await publicOnly.check(new URL('https://www.pw.edu.pl/'))).toBe('OK');
     expect(await publicOnly.check(new URL('https://evil.example.com/'))).toBe('DISALLOWED_HOST');
   });
 
-  it('local fixture escape hatch only applies when explicitly enabled', async () => {
+  it('[LOW-1] local fixture exemption is host-scoped: other hosts and IP literals stay strict', async () => {
     const resolveLoopback = () => Promise.resolve(['127.0.0.1']);
-    const strict = new RequestGuard(allowlist, { allowNonPublic: false }, resolveLoopback);
-    const local = new RequestGuard(allowlist, { allowNonPublic: true }, resolveLoopback);
+    const strict = new RequestGuard(allowlist, STRICT_ADDRESS_POLICY, resolveLoopback);
+    const local = new RequestGuard(
+      allowlist,
+      { nonPublicAllowedHosts: new Set(['pw.edu.pl']) },
+      resolveLoopback,
+    );
     expect(await strict.check(new URL('http://pw.edu.pl/'))).toBe('BLOCKED_PRIVATE_ADDRESS');
     expect(await local.check(new URL('http://pw.edu.pl/'))).toBe('OK');
+    // a live official host crawled in the same process keeps the private-IP block
+    expect(await local.check(new URL('http://www.pw.edu.pl/'))).toBe('BLOCKED_PRIVATE_ADDRESS');
+    expect(await local.checkAddressOnly(new URL('http://127.0.0.1:8088/'))).toBe('BLOCKED_PRIVATE_ADDRESS');
     expect(await strict.checkAddressOnly(new URL('http://169.254.169.254/latest/meta-data'))).toBe(
       'BLOCKED_PRIVATE_ADDRESS',
     );
   });
 
   it('connect-time lookup fails closed on a non-public answer (DNS rebinding defence)', async () => {
-    const guard = new RequestGuard(allowlist, { allowNonPublic: false });
+    const guard = new RequestGuard(allowlist, STRICT_ADDRESS_POLICY);
     const error = await new Promise<unknown>((resolve) => {
       guard.connectLookup('localhost', {}, (err) => resolve(err));
     });

@@ -24,8 +24,6 @@ export interface StoredContentSnapshot {
 type ContentCapture = Extract<Capture, { kind: 'CONTENT' }>;
 type ErrorCapture = Extract<Capture, { kind: 'ERROR' }>;
 
-const CONTENT_TYPES = { html: 'text/html; charset=utf-8', pdf: 'application/pdf' } as const;
-
 export class SnapshotStore {
   constructor(
     private readonly blobs: BlobStorePort,
@@ -74,7 +72,7 @@ export class SnapshotStore {
     const textSha = sha256Hex(capture.cleanText);
     const rawKey = `raw/${rawSha}.${ext}`;
     const textKey = `text/${textSha}.txt`;
-    const rawPut = await this.blobs.putIfAbsent(rawKey, capture.raw, CONTENT_TYPES[ext]);
+    const rawPut = await this.blobs.putIfAbsent(rawKey, capture.raw, capture.rawContentType);
     const textPut = await this.blobs.putIfAbsent(
       textKey,
       Buffer.from(capture.cleanText, 'utf8'),

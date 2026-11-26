@@ -99,6 +99,14 @@ export class KyselyWikiRepository implements WikiRepository {
       .execute();
   }
 
+  async deactivateTarget(targetId: Uuid): Promise<void> {
+    await this.db
+      .updateTable('wiki.crawl_target')
+      .set({ active: false })
+      .where('id', '=', targetId)
+      .execute();
+  }
+
   upsertSeed(
     allowlist: readonly AllowlistEntry[],
     targets: ReadonlyArray<SeedCrawlTarget & { readonly id: Uuid }>,

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { DomainAllowlist } from '../src/crawler/allowlist.js';
 import { CrawlRunner } from '../src/crawler/crawl-runner.js';
-import { KeywordLinkSelector, scoreLink, type LinkSelectorPort } from '../src/crawler/link-selector.js';
+import {
+  KeywordLinkSelector,
+  RELEVANCE_KEYWORDS,
+  scoreLink,
+  type LinkSelectorPort,
+} from '../src/crawler/link-selector.js';
+import { runCrawlBatch, type BatchLine } from '../src/ops/crawl-batch.js';
 import { capturePage, type CaptureDeps } from '../src/crawler/page-capture.js';
 import { SnapshotStore } from '../src/crawler/snapshot-store.js';
 import { parseSeed, SeedValidationError } from '../src/seed/seed.js';
@@ -157,6 +163,36 @@ describe('[T1-G5] tier escalation (rule 2)', () => {
   });
 });
 
+describe('[LOW-5] raw blob keeps the charset it was served with', () => {
+  it('stores Tier 1 HTML with its original Content-Type and Tier 2 HTML as UTF-8', async () => {
+    const blobs = new MemoryBlobStore();
+    const store = new SnapshotStore(blobs, new MemoryRepo(), ids(), clock);
+    const legacy = deps(
+      new ScriptedHttp({
+        'https://pw.edu.pl/cp1250': (u) =>
+          html(u, `<p>${longText(40)}</p>`, 200, { 'content-type': 'text/html; charset=windows-1250' }),
+      }),
+    );
+    const c = await capturePage(new URL('https://pw.edu.pl/cp1250'), legacy);
+    if (c.kind !== 'CONTENT') throw new Error('expected content');
+    expect(c.rawContentType).toBe('text/html; charset=windows-1250');
+    await store.persistContent(c, null);
+    expect([...blobs.types.values()]).toContain('text/html; charset=windows-1250');
+    const renderer = new ScriptedRenderer((u) => ({
+      kind: 'RENDERED',
+      finalUrl: u,
+      status: 200,
+      headers: {},
+      html: RENDERED,
+    }));
+    const t2 = await capturePage(
+      new URL('https://pw.edu.pl/spa'),
+      deps(new ScriptedHttp({ 'https://pw.edu.pl/spa': (u) => html(u, '<div>Loading</div>') }), renderer),
+    );
+    expect(t2.kind === 'CONTENT' && t2.rawContentType).toBe('text/html; charset=utf-8');
+  });
+});
+
 describe('[T1-G8] snapshot store content addressing (§4)', () => {
   it('keys blobs by sha256, skips re-upload of identical bytes, but records a row per capture', async () => {
     const blobs = new MemoryBlobStore();
@@ -275,6 +311,107 @@ describe('[T1-G4] keyword link scorer (rule 5)', () => {
     expect(s('Feedback', 'https://pw.edu.pl/feedback')).toBe(0);
     expect(s('Tuition fee', 'https://pw.edu.pl/x')).toBe(50);
     expect(s('a b c', 'https://pw.edu.pl/admission/apply/tuition/fee/dorm')).toBe(100);
+  });
+
+  it('[LOW-3] short keywords match their inflections (fees, dormitory) but not look-alikes (feedback)', () => {
+    const s = (anchor: string) =>
+      scoreLink({ anchor_text: anchor, url: 'https://pw.edu.pl/x', is_pdf: false });
+    expect(s('Tuition fees 2026/27')).toBe(50);
+    expect(s('Student dormitory')).toBe(25);
+    expect(s('Dormitories and halls')).toBe(25);
+    expect(s('Dorms')).toBe(25);
+    expect(s('Send feedback')).toBe(0);
+    expect(s('Feed the planet')).toBe(0);
+    expect(s('NAWA recognition')).toBe(25);
+    // every keyword of <= 4 chars has an explicit token rule (no silent substring matching)
+    expect(RELEVANCE_KEYWORDS.filter((k) => k.length <= 4).sort()).toEqual(['dorm', 'dsu', 'fee', 'nawa']);
+  });
+});
+
+describe('[HIGH-2] per-URL and per-target failure isolation', () => {
+  it('a capture that throws (e.g. renderer crash) becomes CAPTURE_FAILED and the crawl continues', async () => {
+    const http = new ScriptedHttp({
+      'https://pw.edu.pl/spa': (u) => html(u, '<div id="app">Loading...</div>'),
+      'https://pw.edu.pl/ok': (u) => html(u, `<p>${longText(40)}</p>`),
+    });
+    const crashing = new ScriptedRenderer(() => {
+      throw new Error('Target page, context or browser has been closed');
+    });
+    const repo = new MemoryRepo();
+    const runner = new CrawlRunner({
+      capture: { allowlist, http, renderer: crashing, pdf: twoPagePdf },
+      snapshots: new SnapshotStore(new MemoryBlobStore(), repo, ids(), clock),
+      selector: new KeywordLinkSelector(),
+      repo,
+      clock,
+    });
+    const report = await runner.crawl(
+      target({ seedUrls: ['https://pw.edu.pl/spa', 'https://pw.edu.pl/ok'] }),
+    );
+    expect(report.outcomes).toEqual([
+      expect.objectContaining({
+        url: 'https://pw.edu.pl/spa',
+        status: 'NOT_FETCHED',
+        reason: 'CAPTURE_FAILED',
+      }),
+      expect.objectContaining({ url: 'https://pw.edu.pl/ok', status: 'SNAPSHOT_STORED' }),
+    ]);
+    expect(repo.crawled).toHaveLength(1); // markTargetCrawled still runs
+  });
+
+  it('a PDF extractor that throws a non-PdfExtractionError is isolated too', async () => {
+    const http = new ScriptedHttp({
+      'https://pw.edu.pl/a.pdf': pdf,
+      'https://pw.edu.pl/b': (u) => html(u, `<p>${longText(40)}</p>`),
+    });
+    const repo = new MemoryRepo();
+    const runner = new CrawlRunner({
+      capture: {
+        allowlist,
+        http,
+        renderer: new ScriptedRenderer(() => ({ kind: 'FAILED', reason: 'RENDER_FAILED', detail: '' })),
+        pdf: { extract: () => Promise.reject(new RangeError('Invalid array length')) },
+      },
+      snapshots: new SnapshotStore(new MemoryBlobStore(), repo, ids(), clock),
+      selector: new KeywordLinkSelector(),
+      repo,
+      clock,
+    });
+    const report = await runner.crawl(
+      target({ seedUrls: ['https://pw.edu.pl/a.pdf', 'https://pw.edu.pl/b'] }),
+    );
+    expect(report.outcomes.map((o) => o.status)).toEqual(['NOT_FETCHED', 'SNAPSHOT_STORED']);
+    expect(report.outcomes[0]).toMatchObject({
+      reason: 'CAPTURE_FAILED',
+      detail: expect.stringContaining('RangeError'),
+    });
+  });
+
+  it('crawl --all isolates a failing target and still crawls the rest', async () => {
+    const lines: BatchLine[] = [];
+    const t1 = target({ targetKey: 'a:x:1' });
+    const t2 = target({ targetKey: 'b:x:1' });
+    const t3 = target({ targetKey: 'c:x:1' });
+    const summary = await runCrawlBatch(
+      [t1, t2, t3],
+      (t) =>
+        t.targetKey === 'b:x:1'
+          ? Promise.reject(new Error('connection terminated unexpectedly'))
+          : Promise.resolve({
+              targetKey: t.targetKey,
+              startedAt: '',
+              finishedAt: '',
+              fetchedCount: 0,
+              outcomes: [],
+            }),
+      (line) => lines.push(line),
+    );
+    expect(summary).toEqual({ crawled: 2, failed: 1 });
+    expect(lines.map((l) => `${l.targetKey}:${l.status}`)).toEqual([
+      'a:x:1:CRAWLED',
+      'b:x:1:TARGET_FAILED',
+      'c:x:1:CRAWLED',
+    ]);
   });
 });
 

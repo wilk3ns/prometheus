@@ -95,4 +95,14 @@ describe('[T1-G4] html-extractor (legacy-safe, table-preserving, multilingual li
     expect(out.cleanText).toBe('- Rekrutacja\n- Cennik');
     expect(out.lang).toBe('pl-pl');
   });
+
+  it('[HIGH-2] survives hostile nesting (5,000 and 20,000 nested <div>) without a stack overflow', () => {
+    for (const depth of [5_000, 20_000]) {
+      const deep = `<html><body>${'<div>'.repeat(depth)}<p>Deep tuition text</p><a href="/deep.pdf">deep decree</a>${'</div>'.repeat(depth)}<p>${'Admission text. '.repeat(40)}</p></body></html>`;
+      const out = extractHtml(deep, 'http://fixture.pw.edu.pl/deep', allowlist);
+      expect(out.cleanText).toContain('Deep tuition text'); // content below the depth bound is flattened, not lost
+      expect(out.cleanText).toContain('Admission text.');
+      expect(out.links.map((l) => l.url)).toEqual(['http://fixture.pw.edu.pl/deep.pdf']); // harvested before flattening
+    }
+  });
 });

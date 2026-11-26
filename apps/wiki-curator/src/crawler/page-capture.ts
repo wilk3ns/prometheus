@@ -27,6 +27,8 @@ export type Capture =
       readonly httpStatus: number;
       readonly contentKind: 'HTML' | 'PDF';
       readonly raw: Uint8Array;
+      /** Content-Type the raw bytes were served with (kept as blob metadata; charset matters). */
+      readonly rawContentType: string;
       readonly cleanText: string;
       readonly cleanCharCount: number;
       readonly lang: string | null;
@@ -97,11 +99,7 @@ export async function capturePage(url: URL, deps: CaptureDeps): Promise<Capture>
       pdfText = await deps.pdf.extract(t1.body);
     } catch (error) {
       if (error instanceof PdfExtractionError) {
-        return {
-          kind: 'NOT_FETCHED',
-          reason: 'UNSUPPORTED_CONTENT_TYPE',
-          detail: `unreadable PDF: ${error.message}`,
-        };
+        return { kind: 'NOT_FETCHED', reason: 'EXTRACTION_FAILED', detail: `PDF: ${error.message}` };
       }
       throw error;
     }
@@ -111,6 +109,7 @@ export async function capturePage(url: URL, deps: CaptureDeps): Promise<Capture>
       ...base,
       contentKind: 'PDF',
       raw: t1.body,
+      rawContentType: 'application/pdf',
       cleanText,
       cleanCharCount: [...cleanText].length,
       lang: null,
@@ -149,6 +148,7 @@ export async function capturePage(url: URL, deps: CaptureDeps): Promise<Capture>
       ...base,
       contentKind: 'HTML',
       raw: t1.body,
+      rawContentType: t1.headers['content-type'] ?? 'text/html',
       cleanText: t1Text.cleanText,
       cleanCharCount: t1Text.cleanCharCount,
       lang: t1Text.lang,
@@ -203,6 +203,7 @@ export async function capturePage(url: URL, deps: CaptureDeps): Promise<Capture>
     httpStatus: t2.status,
     contentKind: 'HTML',
     raw: Buffer.from(t2.html, 'utf8'),
+    rawContentType: 'text/html; charset=utf-8', // serialised DOM is always UTF-8
     cleanText: t2Text.cleanText,
     cleanCharCount: t2Text.cleanCharCount,
     lang: t2Text.lang,

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadWikiCuratorConfig } from '@prometheus/config';
@@ -16,6 +17,12 @@ import { applySeed, parseSeed, readSeedFile } from '../seed/seed.js';
 const VAULT_SEED = join('engineering', 'fixtures', 'seed-5country-targets.json');
 const FIXTURE_TARGET = 'fixture:hub-smoke:2027-FALL';
 const LIVE_TARGET = 'polimi:msc-cse:2027-FALL';
+/**
+ * A page whose bytes are unique to this smoke run: crawl #1 must CREATE its blobs (provably first write,
+ * even on a warm bucket) and crawl #2 must reuse them.
+ */
+const RUN_NONCE = randomUUID();
+const NONCE_PATH = `/nonce/${RUN_NONCE}`;
 
 class SmokeFailure extends Error {
   override readonly name = 'SmokeFailure';
@@ -91,29 +98,34 @@ async function main(): Promise<void> {
     console.log(`[2/5] seed local fixture target ${FIXTURE_TARGET} (${origin})`);
     await applySeed(
       runtime.repo,
-      parseSeed({
-        schema_version: 'seed-targets-v1.0',
-        allowlisted_domains: [
-          {
-            host: new URL(origin).hostname,
-            country_iso2: 'PL',
-            org_kind: 'UNIVERSITY',
-            allow_subdomains: false,
-            default_fetch_mode: 'HTTP_FIRST',
-            notes: 'LOCAL FIXTURE (smoke:t1) - unreachable outside ALLOW_LOCAL_FIXTURE_HOSTS=true',
-          },
-        ],
-        crawl_targets: [
-          {
-            target_key: FIXTURE_TARGET,
-            country_iso2: 'PL',
-            layer_hint: 'PROGRAM',
-            max_depth: 1,
-            max_pages: 30,
-            seed_urls: ['/hub', '/js-catalog', '/sample.pdf', '/waf-blocked'].map((p) => `${origin}${p}`),
-          },
-        ],
-      }),
+      parseSeed(
+        {
+          schema_version: 'seed-targets-v1.0',
+          allowlisted_domains: [
+            {
+              host: new URL(origin).hostname,
+              country_iso2: 'PL',
+              org_kind: 'UNIVERSITY',
+              allow_subdomains: false,
+              default_fetch_mode: 'HTTP_FIRST',
+              notes: 'LOCAL FIXTURE (smoke:t1) - unreachable outside ALLOW_LOCAL_FIXTURE_HOSTS=true',
+            },
+          ],
+          crawl_targets: [
+            {
+              target_key: FIXTURE_TARGET,
+              country_iso2: 'PL',
+              layer_hint: 'PROGRAM',
+              max_depth: 1,
+              max_pages: 30,
+              seed_urls: ['/hub', '/js-catalog', '/sample.pdf', '/waf-blocked', NONCE_PATH].map(
+                (p) => `${origin}${p}`,
+              ),
+            },
+          ],
+        },
+        { nonDefaultPortHosts: new Set(config.crawler.localFixtureHosts) },
+      ),
       runtime.ids,
     );
     const fixture = await runtime.repo.findTargetByKey(FIXTURE_TARGET);
@@ -158,6 +170,15 @@ async function main(): Promise<void> {
         'local-language /pl/cennik-ds followed and stored',
       );
       console.log(`      blobs raw ${before.raw}->${afterRun1.raw}, text ${before.text}->${afterRun1.text}`);
+      const nonce1 = byPath(run1, origin, NONCE_PATH);
+      check(
+        nonce1.status === 'SNAPSHOT_STORED' && nonce1.rawBlobCreated && nonce1.textBlobCreated,
+        `run #1 WROTE new raw+text blobs for the per-run page ${NONCE_PATH}`,
+      );
+      check(
+        afterRun1.raw >= before.raw + 1 && afterRun1.text >= before.text + 1,
+        'run #1 increased the MinIO object count (first write observed)',
+      );
 
       console.log('[4/5] crawl #2 (content-addressed dedupe)');
       const run2 = await session.runner.crawl(fixture);
@@ -170,7 +191,7 @@ async function main(): Promise<void> {
         `run #2 stored the same ${stored1.length} documents`,
       );
       check(
-        stored2.every((o) => !o.rawBlobCreated && !o.textBlobCreated),
+        stored2.length === stored1.length && stored2.every((o) => !o.rawBlobCreated && !o.textBlobCreated),
         'run #2 uploaded 0 new raw/text blobs (put-if-absent hit for every document)',
       );
       check(
@@ -209,6 +230,10 @@ async function main(): Promise<void> {
       }
     } finally {
       await session.close();
+      // Leave nothing crawlable behind: `crawl --all` must never pick up the fixture target.
+      // (wiki_writer has no DELETE; the allowlist row is inert without ALLOW_LOCAL_FIXTURE_HOSTS=true.)
+      await runtime.repo.deactivateTarget(fixture.id);
+      console.log(`      cleanup: ${FIXTURE_TARGET} set active=false`);
     }
   } finally {
     await runtime.close();

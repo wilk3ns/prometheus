@@ -63,4 +63,21 @@ describe('[T1-G1] config loader', () => {
     }
     expect(() => loadWikiCuratorConfig({})).toThrow(ConfigError);
   });
+
+  it('[LOW-1] fixture exemption is host-scoped and empty unless explicitly enabled', () => {
+    expect(loadWikiCuratorConfig(local).crawler.localFixtureHosts).toEqual([]);
+    expect(
+      loadWikiCuratorConfig({ ...local, ALLOW_LOCAL_FIXTURE_HOSTS: 'true' }).crawler.localFixtureHosts,
+    ).toEqual(['localhost']);
+    expect(
+      loadWikiCuratorConfig({
+        ...local,
+        ALLOW_LOCAL_FIXTURE_HOSTS: 'true',
+        LOCAL_FIXTURE_HOSTS: 'Fixture.Local, localhost',
+      }).crawler.localFixtureHosts,
+    ).toEqual(['fixture.local', 'localhost']);
+    expect(() =>
+      loadWikiCuratorConfig({ ...local, ALLOW_LOCAL_FIXTURE_HOSTS: 'true', LOCAL_FIXTURE_HOSTS: 'http://x' }),
+    ).toThrow(/LOCAL_FIXTURE_HOSTS/);
+  });
 });

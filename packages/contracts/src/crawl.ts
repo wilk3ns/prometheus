@@ -21,6 +21,10 @@ export const NotFetchedReason = z.enum([
   'UNSUPPORTED_CONTENT_TYPE',
   'TOO_MANY_REDIRECTS',
   'RENDER_FAILED',
+  /** Content was fetched but could not be extracted (e.g. unreadable / oversized / too-slow PDF). */
+  'EXTRACTION_FAILED',
+  /** Unexpected error while capturing this URL; isolated so the rest of the crawl continues. */
+  'CAPTURE_FAILED',
 ]);
 export type NotFetchedReason = z.infer<typeof NotFetchedReason>;
 

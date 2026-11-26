@@ -19,6 +19,8 @@ export interface WikiRepository {
   listActiveTargets(): Promise<CrawlTargetRow[]>;
   insertSnapshot(record: SnapshotRecord): Promise<void>;
   markTargetCrawled(targetId: Uuid, at: Date): Promise<void>;
+  /** Sets `active = false` (wiki_writer has no DELETE); inactive targets are skipped by `crawl --all`. */
+  deactivateTarget(targetId: Uuid): Promise<void>;
   /** Idempotent seed upsert of allowlist + targets, in one transaction. Targets keep their id on re-seed. */
   upsertSeed(
     allowlist: readonly AllowlistEntry[],

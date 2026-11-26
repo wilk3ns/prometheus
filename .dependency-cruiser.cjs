@@ -10,7 +10,7 @@ const VENDOR_OWNERS = [
   {
     sdk: 'undici',
     path: '(^|/)node_modules/undici/',
-    owner: '^apps/wiki-curator/src/crawler/tier1-http[.]ts$',
+    owner: '^apps/wiki-curator/src/crawler/guarded-http[.]ts$',
   },
   {
     sdk: 'playwright',

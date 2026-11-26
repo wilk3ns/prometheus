@@ -4,6 +4,7 @@ import { FileSecretsAdapter, S3BlobStoreAdapter } from '@prometheus/infra-adapte
 import type { BlobStorePort } from '@prometheus/infra-ports';
 import { createUuidV7Generator, systemClock, type ClockPort, type IdGen } from '@prometheus/kernel';
 import { DomainAllowlist } from './crawler/allowlist.js';
+import { GuardedHttpClient } from './crawler/guarded-http.js';
 import { CrawlRunner } from './crawler/crawl-runner.js';
 import { KeywordLinkSelector } from './crawler/link-selector.js';
 import { PdfjsTextExtractor } from './crawler/pdf-extractor.js';
@@ -70,13 +71,14 @@ export interface CrawlSession {
 
 /** Builds a crawl session against the allowlist as currently stored in `wiki.official_domain_allowlist`. */
 export async function openCrawlSession(runtime: CuratorRuntime): Promise<CrawlSession> {
-  const allowlist = new DomainAllowlist(await runtime.repo.loadAllowlist());
-  const guard = new RequestGuard(allowlist, {
-    allowNonPublic: runtime.config.crawler.allowLocalFixtureHosts,
-  });
-  const options = { userAgent: runtime.config.crawler.userAgent };
-  const http = new UndiciHttpFetcher(guard, options);
-  const renderer = new PlaywrightJsRenderer(guard, options);
+  // The local fixture exemption (empty unless INFRA_PROFILE=local + ALLOW_LOCAL_FIXTURE_HOSTS=true) is
+  // host-scoped: only these hostnames may resolve to non-public addresses or use non-default ports.
+  const exempt: ReadonlySet<string> = new Set(runtime.config.crawler.localFixtureHosts);
+  const allowlist = new DomainAllowlist(await runtime.repo.loadAllowlist(), { nonDefaultPortHosts: exempt });
+  const guard = new RequestGuard(allowlist, { nonPublicAllowedHosts: exempt });
+  const client = new GuardedHttpClient(guard, { userAgent: runtime.config.crawler.userAgent });
+  const http = new UndiciHttpFetcher(client);
+  const renderer = new PlaywrightJsRenderer(client, runtime.config.crawler.userAgent);
   const runner = new CrawlRunner({
     capture: { allowlist, http, renderer, pdf: new PdfjsTextExtractor() },
     snapshots: new SnapshotStore(runtime.blobs, runtime.repo, runtime.ids, runtime.clock),
@@ -89,7 +91,7 @@ export async function openCrawlSession(runtime: CuratorRuntime): Promise<CrawlSe
     allowlist,
     async close() {
       await renderer.close();
-      await http.close();
+      await client.close();
     },
   };
 }

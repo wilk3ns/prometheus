@@ -54,8 +54,24 @@ export const RELEVANCE_KEYWORDS: readonly string[] = [
 
 const KEYWORD_POINTS = 25;
 const PDF_POINTS = 25;
-/** Short keywords must match a whole token (`fee` must not match `feedback`); longer stems match inflections. */
-const WHOLE_TOKEN_MAX_LEN = 4;
+/**
+ * Short keywords are matched per token with an explicit inflection rule, so `fee` hits `fees` but not
+ * `feedback`, and `dorm` hits `dorms` / `dormitory`. Longer stems (>= 5 chars) match as substrings, which
+ * covers inflections such as `rekrutacji` and compounds such as `tariffario_ING`.
+ */
+const SHORT_KEYWORD_TOKEN: Readonly<Record<string, RegExp>> = {
+  fee: /^fees?$/,
+  dsu: /^dsu$/,
+  dorm: /^dorm(s|itory|itories)?$/,
+  nawa: /^nawa$/,
+};
+
+function matches(keyword: string, text: string, words: ReadonlySet<string>): boolean {
+  const tokenRule = SHORT_KEYWORD_TOKEN[keyword];
+  if (tokenRule === undefined) return text.includes(keyword);
+  for (const w of words) if (tokenRule.test(w)) return true;
+  return false;
+}
 
 /** Links whose path ends in one of these can never become an HTML/PDF snapshot. */
 const NON_DOCUMENT_EXT =
@@ -87,8 +103,7 @@ export function scoreLink(link: DiscoveredLink): number {
   const words = tokens(text);
   let score = 0;
   for (const keyword of RELEVANCE_KEYWORDS) {
-    const hit = keyword.length <= WHOLE_TOKEN_MAX_LEN ? words.has(keyword) : text.includes(keyword);
-    if (hit) score += KEYWORD_POINTS;
+    if (matches(keyword, text, words)) score += KEYWORD_POINTS;
   }
   if (link.is_pdf) score += PDF_POINTS;
   return Math.min(100, score);
