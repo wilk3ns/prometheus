@@ -1,0 +1,92 @@
+# Local-only development stack. Zero cloud credentials; every password below is a dev default.
+# All host ports bind to 127.0.0.1 only (Valkey has no auth; the dev passwords are public).
+name: prometheus
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_ADMIN_PASSWORD:-postgres_dev}
+      POSTGRES_DB: prometheus
+    ports:
+      - '127.0.0.1:${PG_PORT:-5432}:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d prometheus']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    ports:
+      - '127.0.0.1:${VALKEY_PORT:-6379}:6379'
+    healthcheck:
+      test: ['CMD', 'valkey-cli', 'ping']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # MinIO upstream no longer publishes community images on Docker Hub/Quay. Chainguard's image is built
+  # from upstream MinIO source (RELEASE.2026-11-23T00-10-37Z) and bundles `mc` + bash; pinned by digest.
+  minio:
+    image: &minio-image cgr.dev/chainguard/minio@sha256:b9b1cce81a4a6cc9bf250e68d621cc0b9fb8ed15aefe18fcd1840525eab6a81a
+    command: ['server', '/data', '--console-address', ':9001']
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio-dev}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio-dev-secret}
+    ports:
+      - '127.0.0.1:${MINIO_PORT:-9000}:9000'
+      - '127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001'
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  minio-init:
+    image: *minio-image
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio-dev}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio-dev-secret}
+    entrypoint: ['/usr/bin/bash', '-c']
+    command:
+      - >
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        for b in wiki-snapshots quarantine clean-vault exports; do mc mb --ignore-existing "local/$$b"; done
+    restart: 'no'
+
+  fixture-sites:
+    image: node:24-alpine
+    # The crawl test surface comes up only once the snapshot buckets exist, so `up --wait` == stack ready
+    # (Compose treats a one-shot as healthy only when a dependant waits on its successful completion).
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    working_dir: /srv
+    command: ['node', 'server.mjs']
+    environment:
+      PORT: '8088'
+    ports:
+      - '127.0.0.1:${FIXTURE_SITES_PORT:-8088}:8088'
+      # raw TCP+UDP egress canary (counts every connection / datagram; see fixture-sites/probes.mjs)
+      - '127.0.0.1:${FIXTURE_CANARY_PORT:-8089}:8089/tcp'
+      - '127.0.0.1:${FIXTURE_CANARY_PORT:-8089}:8089/udp'
+    volumes:
+      - ./fixture-sites:/srv:ro
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8088/healthz']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:
+  miniodata:

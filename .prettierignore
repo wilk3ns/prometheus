@@ -1,0 +1,8 @@
+node_modules
+dist
+.turbo
+pnpm-lock.yaml
+db/schema.sql
+packages/db/src/generated
+deploy/compose/fixture-sites/public/
+.secrets

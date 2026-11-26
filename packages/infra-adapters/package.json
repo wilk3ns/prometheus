@@ -1,0 +1,29 @@
+{
+  "name": "@prometheus/infra-adapters",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./local": {
+      "@prometheus/source": "./local/index.ts",
+      "types": "./dist/local/index.d.ts",
+      "default": "./dist/local/index.js"
+    },
+    "./azure": {
+      "@prometheus/source": "./azure/index.ts",
+      "types": "./dist/azure/index.d.ts",
+      "default": "./dist/azure/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint local azure test"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1177.0",
+    "@azure/storage-blob": "^12.34.0",
+    "@prometheus/infra-ports": "workspace:*",
+    "iovalkey": "^0.4.0"
+  }
+}
