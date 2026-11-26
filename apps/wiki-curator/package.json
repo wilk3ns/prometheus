@@ -1,0 +1,32 @@
+{
+  "name": "@prometheus/wiki-curator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "wiki-curator": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src test",
+    "seed": "node ../../scripts/with-local-env.mjs node dist/cli.js seed",
+    "crawl": "node ../../scripts/with-local-env.mjs node dist/cli.js crawl",
+    "smoke:t1": "node ../../scripts/with-local-env.mjs ALLOW_LOCAL_FIXTURE_HOSTS=true node dist/ops/smoke-t1.js"
+  },
+  "dependencies": {
+    "@prometheus/config": "workspace:*",
+    "@prometheus/contracts": "workspace:*",
+    "@prometheus/db": "workspace:*",
+    "@prometheus/infra-adapters": "workspace:*",
+    "@prometheus/infra-ports": "workspace:*",
+    "@prometheus/kernel": "workspace:*",
+    "domhandler": "^6.0.1",
+    "htmlparser2": "^12.0.0",
+    "kysely": "^0.29.9",
+    "pdfjs-dist": "^6.5.438",
+    "playwright": "^1.65.1",
+    "undici": "^8.13.1",
+    "zod": "^4.6.7"
+  }
+}

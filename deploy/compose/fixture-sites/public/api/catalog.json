@@ -1,0 +1,55 @@
+{
+  "title": "Degree programme catalogue 2027/2028",
+  "programmes": [
+    {
+      "name": "Computer Science MSc",
+      "summary": "Two-year programme in English covering algorithms, distributed systems and machine learning; admission requires a relevant BSc and B2 English.",
+      "href": "/programmes/1"
+    },
+    {
+      "name": "Data Science MSc",
+      "summary": "Statistics, data engineering and applied machine learning taught in English with a compulsory internship semester and a research thesis.",
+      "href": "/programmes/2"
+    },
+    {
+      "name": "Software Engineering BSc",
+      "summary": "Three-year programme focused on software design, testing and project work; entrance exam in mathematics for international applicants.",
+      "href": "/programmes/3"
+    },
+    {
+      "name": "Mathematics BSc",
+      "summary": "Foundations of analysis, algebra and probability; Stipendium Hungaricum scholarship holders are exempt from the tuition fee.",
+      "href": "/programmes/4"
+    },
+    {
+      "name": "Physics MSc",
+      "summary": "Experimental and theoretical physics tracks with laboratory work; tuition fee 6,000 EUR per year for self-financed students.",
+      "href": "/programmes/5"
+    },
+    {
+      "name": "Economics BSc",
+      "summary": "Microeconomics, macroeconomics and econometrics in English; application deadline for the autumn intake is 31 May.",
+      "href": "/programmes/6"
+    },
+    {
+      "name": "International Relations MA",
+      "summary": "Diplomacy, European integration and security studies; motivation letter and interview required for admission.",
+      "href": "/programmes/7"
+    },
+    {
+      "name": "Biology MSc",
+      "summary": "Molecular biology, ecology and genetics specialisations with field courses; IELTS 6.0 or equivalent language certificate required.",
+      "href": "/programmes/8"
+    },
+    {
+      "name": "Psychology MA",
+      "summary": "Clinical, work and organisational psychology tracks; applicants must submit a CV and two recommendation letters.",
+      "href": "/programmes/9"
+    },
+    {
+      "name": "Environmental Science MSc",
+      "summary": "Climate, water and soil science with GIS laboratory practice; dormitory places available for first-year international students.",
+      "href": "/programmes/10"
+    }
+  ]
+}

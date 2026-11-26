@@ -1,0 +1,40 @@
+{
+  "name": "prometheus",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.21.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint && pnpm run lint:deps && pnpm run format:check",
+    "lint:deps": "depcruise --config .dependency-cruiser.cjs packages apps",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run --project unit",
+    "test:it": "vitest run --project it",
+    "db:migrate": "node scripts/db.mjs migrate",
+    "db:rollback": "node scripts/db.mjs rollback",
+    "db:verify": "node scripts/db.mjs verify",
+    "secrets:init-local": "node scripts/init-local-secrets.mjs",
+    "stack:up": "docker compose -f deploy/compose/compose.yaml up -d --wait",
+    "stack:down": "docker compose -f deploy/compose/compose.yaml down",
+    "smoke:t1": "pnpm run build && node scripts/init-local-secrets.mjs && pnpm --filter @prometheus/wiki-curator smoke:t1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.10",
+    "dbmate": "^2.38.2",
+    "dependency-cruiser": "^18.9.0",
+    "eslint": "^10.15.0",
+    "kysely-codegen": "^0.20.0",
+    "pg": "^8.23.1",
+    "prettier": "^3.10.1",
+    "turbo": "^2.11.13",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.74.0",
+    "vitest": "^5.1.2"
+  }
+}
