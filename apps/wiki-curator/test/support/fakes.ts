@@ -1,6 +1,7 @@
 import type { SnapshotRecord } from '@prometheus/contracts';
 import type {
   BlobStorePort,
+  HtmlExtractorPort,
   HttpFetcherPort,
   HttpFetchOutcome,
   JsRendererPort,
@@ -10,6 +11,8 @@ import type {
   RenderOutcome,
 } from '@prometheus/infra-ports';
 import { createUuidV7Generator, fixedClock, type Uuid } from '@prometheus/kernel';
+import type { DomainAllowlist } from '../../src/crawler/allowlist.js';
+import { extractHtml } from '../../src/crawler/html-extractor.js';
 import type { CrawlTargetRow } from '../../src/persistence/wiki-repository.js';
 
 export const clock = fixedClock(new Date('2026-11-26T12:00:00Z'));
@@ -117,5 +120,13 @@ export function target(overrides: Partial<CrawlTargetRow> = {}): CrawlTargetRow 
     maxPages: 30,
     active: true,
     ...overrides,
+  };
+}
+
+/** In-process HtmlExtractorPort for unit tests (production runs the same pure function in a worker). */
+export function inProcessHtml(allowlist: DomainAllowlist): HtmlExtractorPort {
+  return {
+    extract: (h, finalUrl, contentLanguage) =>
+      Promise.resolve(extractHtml(h, finalUrl, allowlist, contentLanguage)),
   };
 }

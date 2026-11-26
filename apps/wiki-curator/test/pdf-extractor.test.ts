@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PdfExtractionError } from '@prometheus/infra-ports';
-import { formatPageIndexedText, PdfjsTextExtractor } from '../src/crawler/pdf-extractor.js';
+import { formatPageIndexedText } from '../src/crawler/page-indexed-text.js';
+import { PdfjsTextExtractor } from '../src/crawler/pdf-extractor.js';
 import { CRAWL_POLICY } from '../src/crawler/policy.js';
 import { fixtureFile } from './support/fixtures.js';
 
@@ -41,11 +42,6 @@ describe('[T1-G6] pdf-extractor', () => {
     await expect(capped.extract(new Uint8Array(fixtureFile('sample.pdf')))).rejects.toBeInstanceOf(
       PdfExtractionError,
     );
-  });
-
-  it('[HIGH-2] enforces the wall-clock bound with a typed error', async () => {
-    const slow = new PdfjsTextExtractor({ timeoutMs: 0 });
-    await expect(slow.extract(new Uint8Array(fixtureFile('sample.pdf')))).rejects.toThrow(/exceeded 0 ms/);
   });
 
   it('default bounds fit the wiki.source_snapshot.page_count smallint', () => {

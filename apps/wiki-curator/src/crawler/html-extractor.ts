@@ -1,4 +1,5 @@
 import type { DiscoveredLink } from '@prometheus/contracts';
+import type { HtmlExtraction } from '@prometheus/infra-ports';
 import { type ChildNode, type Element, isTag, isText, Text } from 'domhandler';
 import { parseDocument } from 'htmlparser2';
 import type { DomainAllowlist } from './allowlist.js';
@@ -16,12 +17,7 @@ import { looksLikePdfUrl, normalizeUrl, parseHttpUrl } from './url.js';
  *   the final URL, normalised, deduplicated and filtered to the official allowlist. Never synthesised.
  */
 
-export interface HtmlExtraction {
-  readonly cleanText: string;
-  readonly cleanCharCount: number;
-  readonly links: readonly DiscoveredLink[];
-  readonly lang: string | null;
-}
+export type { HtmlExtraction };
 
 const STRIP_TAGS: ReadonlySet<string> = new Set([
   'script',

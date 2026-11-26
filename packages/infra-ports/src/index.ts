@@ -11,4 +11,7 @@ export {
   type PdfText,
   type PdfExtractorPort,
   PdfExtractionError,
+  type HtmlExtraction,
+  type HtmlExtractorPort,
+  HtmlExtractionError,
 } from './fetchers.js';

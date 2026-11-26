@@ -19,6 +19,7 @@ export const LOCAL_DEFAULTS = {
   S3_ACCESS_KEY_ID: 'minio-dev',
   WIKI_SNAPSHOT_BUCKET: 'wiki-snapshots',
   FIXTURE_SITES_ORIGIN: 'http://localhost:8088',
+  FIXTURE_CANARY_ORIGIN: 'http://localhost:8089',
   SECRETS_DIR: join(REPO_ROOT, '.secrets'),
 };
 
@@ -33,6 +34,9 @@ export function applyLocalDefaults(env = process.env) {
     ...(env.FIXTURE_SITES_PORT === undefined
       ? {}
       : { FIXTURE_SITES_ORIGIN: `http://localhost:${env.FIXTURE_SITES_PORT}` }),
+    ...(env.FIXTURE_CANARY_PORT === undefined
+      ? {}
+      : { FIXTURE_CANARY_ORIGIN: `http://localhost:${env.FIXTURE_CANARY_PORT}` }),
   };
   for (const [key, value] of Object.entries({ ...LOCAL_DEFAULTS, ...derived })) {
     if (env[key] === undefined || env[key] === '') env[key] = value;

@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
+import { BUDGET_BYTES_PAGE, BUDGET_COUNT_PAGE, escapeProbe, FILLER, startRawCanary } from './probes.mjs';
 
 const PUBLIC = fileURLToPath(new URL('./public/', import.meta.url));
 const port = Number(process.env.PORT ?? 8088);
@@ -24,42 +25,13 @@ const WAF_PAGE = `<!DOCTYPE html><html lang="en"><head><title>Just a moment...</
 <script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1?ray=fixture"></script>
 </div></body></html>`;
 
-const FILLER = Array.from(
-  { length: 40 },
-  (_, i) => `Admission requirement ${i}: applicants submit certified documents before the deadline.`,
-).join(' ');
-
 // --- SSRF canaries: every request / WebSocket upgrade to /canary/<id> is counted; tests read /canary-hits.
 const canaryHits = new Map();
 function hitCanary(key) {
   canaryHits.set(key, (canaryHits.get(key) ?? 0) + 1);
 }
 
-/**
- * A page whose script tries every browser egress path towards a NON-allowlisted loopback origin
- * (127.0.0.1 while the page is served from the allowlisted fixture host). Loopback -> loopback is the same
- * address space, so Chromium's Local Network Access checks do not block any of these: only our guard can.
- * The `/canary/<id>-control` fetch goes to the page's own allowlisted origin and MUST be counted (proves
- * the probe ran and that the counter works).
- */
-function escapeProbe(id, origin) {
-  const evil = `http://127.0.0.1:${new URL(origin).port}`;
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>escape probe</title></head><body>
-<div id="content"><h1>Escape probe ${id}</h1><p>${FILLER}</p></div>
-<iframe src="${evil}/canary/${id}-iframe"></iframe>
-<script>
-  const evil = ${JSON.stringify(evil)};
-  const id = ${JSON.stringify(id)};
-  fetch('/canary/' + id + '-control').catch(() => {});
-  fetch(evil + '/canary/' + id + '-fetch').catch(() => {});
-  try { navigator.sendBeacon(evil + '/canary/' + id + '-beacon', 'x'); } catch (e) {}
-  try { window.open(evil + '/canary/' + id + '-popup'); } catch (e) {}
-  try { window.open('/canary/' + id + '-popup-same-origin'); } catch (e) {}
-  try { new WebSocket(evil.replace('http', 'ws') + '/canary/' + id + '-ws'); } catch (e) {}
-  try { new WebSocket(location.origin.replace('http', 'ws') + '/canary/' + id + '-ws-same-origin'); } catch (e) {}
-  document.getElementById('content').setAttribute('data-probe', 'ran-' + id);
-</script></body></html>`;
-}
+const rawCanary = startRawCanary(Number(process.env.RAW_CANARY_PORT ?? 8089));
 
 /** A page that never reaches networkidle (polls every 200 ms): exercises the 10 s networkidle cap. */
 const BUSY_PAGE = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>busy</title></head><body>
@@ -84,8 +56,22 @@ const server = createServer(async (req, res) => {
   }
   if (path === '/canary-hits')
     return send(res, 200, 'application/json', JSON.stringify(Object.fromEntries(canaryHits)));
-  if (path === '/escape-probe')
-    return send(res, 200, 'text/html; charset=utf-8', escapeProbe(url.searchParams.get('id') ?? 'x', origin));
+  if (path === '/escape-probe') {
+    const rawPort = Number(url.searchParams.get('raw') ?? process.env.RAW_CANARY_PORT ?? 8089);
+    return send(
+      res,
+      200,
+      'text/html; charset=utf-8',
+      escapeProbe(url.searchParams.get('id') ?? 'x', origin, rawPort),
+    );
+  }
+  if (path === '/canary-raw') return send(res, 200, 'application/json', JSON.stringify(rawCanary));
+  if (path === '/bytes') {
+    const mb = Math.min(Number(url.searchParams.get('mb') ?? '1'), 14);
+    return send(res, 200, 'text/javascript', Buffer.alloc(mb * MB, 0x20));
+  }
+  if (path === '/budget-bytes') return send(res, 200, 'text/html; charset=utf-8', BUDGET_BYTES_PAGE);
+  if (path === '/budget-count') return send(res, 200, 'text/html; charset=utf-8', BUDGET_COUNT_PAGE);
   if (path === '/busy-page') return send(res, 200, 'text/html; charset=utf-8', BUSY_PAGE);
   if (path.startsWith('/nonce/')) {
     const nonce = path.slice('/nonce/'.length).replace(/[^a-zA-Z0-9-]/g, '');

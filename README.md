@@ -45,6 +45,7 @@ refuses to do so when `INFRA_PROFILE` is not `local`. Override any of them in yo
 | `WIKI_SNAPSHOT_BUCKET`                                                             | `wiki-snapshots`                                          |                                                                                                                                       |
 | `SECRETS_DIR`                                                                      | `<repo>/.secrets`                                         | must be absolute                                                                                                                      |
 | `VALKEY_URL`                                                                       | `redis://localhost:6379`                                  |                                                                                                                                       |
+| `FIXTURE_CANARY_ORIGIN`                                                            | `http://localhost:8089`                                   | raw TCP+UDP egress canary used by the escape ITs                                                                                      |
 | `FIXTURE_SITES_ORIGIN`                                                             | `http://localhost:8088`                                   |                                                                                                                                       |
 | `ALLOW_LOCAL_FIXTURE_HOSTS`                                                        | `false`                                                   | `true` exempts ONLY the `LOCAL_FIXTURE_HOSTS` hostnames from the private-IP block and the default-port rule; rejected outside `local` |
 | `LOCAL_FIXTURE_HOSTS`                                                              | `localhost`                                               | comma-separated fixture hostnames for the exemption above; IP literals and every other host stay strict (live crawls included)        |
@@ -78,17 +79,28 @@ Tests are tagged with the T1 exit gate they prove (`[T1-G3]` ... `[T1-G8]`).
 - **Tier 1** (undici): redirects followed hop by hop through the guard; one 15 s deadline over all hops + body.
   PDFs (content-type or `%PDF-` magic) go to pdf.js, never Playwright. 404/410 -> `MISSING_SOURCE_404` row.
   Escalate to Tier 2 iff host is `JS_CATALOG` or Tier 1 clean text < 500 chars.
-- **Tier 2** (Playwright Chromium): `context.route` serves every request of every page through the guarded
-  client, so Chromium never opens a connection itself. Documents (main frame + iframes) must be allowlisted;
-  sub-resources may be third-party public hosts, never non-public. Main-frame redirects are re-navigated
-  after a guard check. Popups are closed, WebSockets closed before server contact, image/media/font + trackers
-  aborted, service workers / downloads / non-proxied WebRTC / DNS prefetch disabled. `domcontentloaded` +
-  `networkidle` (cap 10 s), one 25 s render deadline, rendered HTML capped at 15 MB. No stealth plugins, no
-  CAPTCHA solving: challenge gates -> `WAF_CHALLENGE_DETECTED`.
+- **Tier 2** (Playwright Chromium), three independent containment layers (`crawler/browser-hardening.ts`):
+  1. `context.route` serves every request of every page through the guarded client; documents (main frame +
+     iframes) must be allowlisted, sub-resources must be public; main-frame redirects are re-navigated after a
+     guard check; popups are closed; `routeWebSocket` closes every WebSocket before it connects;
+  2. an init script removes WebRTC (`RTCPeerConnection`, `webkitRTCPeerConnection`, `RTCDataChannel`, ...),
+     `WebTransport` and `WebSocketStream` from every frame before page scripts run;
+  3. Chromium's only proxy is a local fail-closed black hole (`crawler/egress-blackhole.ts`, implicit loopback
+     bypass removed), with QUIC, non-proxied WebRTC UDP, DNS prefetch and background networking disabled, so
+     anything that still dials out (e.g. from a worker) reaches nothing.
+
+  Per render: `domcontentloaded` + `networkidle` (cap 10 s), one 25 s deadline, at most 250 requests and 50 MB
+  in total (`RENDER_BUDGET_EXCEEDED`), and rendered HTML capped at 15 MB. No stealth plugins, no CAPTCHA
+  solving: challenge gates become `WAF_CHALLENGE_DETECTED`.
+
+- **Local fixture exemption** is host-scoped (`LOCAL_FIXTURE_HOSTS`) and context-scoped: it applies only to the
+  crawl target's own requests (Tier 1, and the requests of a page whose own host is a fixture host), never to
+  sub-resources of any other page. So `LIVE_CRAWL=1` pages cannot reach local services.
 - **Resilience:** an error while capturing one URL becomes `NOT_FETCHED / CAPTURE_FAILED` and the crawl goes on;
-  `crawl --all` isolates per target (`TARGET_FAILED`, exit 1 at the end). DOM nesting beyond 256 levels is
-  flattened to text (stack-safe on hostile pages); pdf.js is bounded to 2,000 pages and 60 s
-  (`EXTRACTION_FAILED`).
+  `crawl --all` isolates per target (`TARGET_FAILED`, exit 1 at the end). HTML and PDF extraction run in a fresh
+  worker thread (`crawler/extraction-sandbox.ts`) with a heap limit and a hard wall-clock limit enforced by
+  `worker.terminate()`: 20 s for HTML, 60 s for PDF, failing as `EXTRACTION_FAILED`. DOM nesting beyond 256
+  levels is flattened to text, and PDFs above 2,000 pages are refused.
 - HTML extraction never assumes `<main>`; strips chrome; data tables become pipe-delimited Markdown.
 - Links: all allowlisted `href`s (local-language paths included), normalised (no `#fragment`, no `utm_*`),
   never synthesised. BFS order comes from the `LinkSelectorPort` (deterministic keyword scorer in T1); the runner

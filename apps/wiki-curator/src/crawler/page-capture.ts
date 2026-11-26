@@ -1,14 +1,16 @@
 import type { DiscoveredLink, FetchTier, NotFetchedReason, SnapshotErrorCode } from '@prometheus/contracts';
 import {
+  HtmlExtractionError,
   PdfExtractionError,
+  type HtmlExtraction,
+  type HtmlExtractorPort,
   type HttpFetcherPort,
   type JsRendererPort,
   type PdfExtractorPort,
 } from '@prometheus/infra-ports';
 import type { DomainAllowlist } from './allowlist.js';
 import { decodeHtml } from './charset.js';
-import { extractHtml } from './html-extractor.js';
-import { formatPageIndexedText } from './pdf-extractor.js';
+import { formatPageIndexedText } from './page-indexed-text.js';
 import { CRAWL_POLICY } from './policy.js';
 import { isChallengeGate } from './waf-detector.js';
 
@@ -50,6 +52,29 @@ export interface CaptureDeps {
   readonly http: HttpFetcherPort;
   readonly renderer: JsRendererPort;
   readonly pdf: PdfExtractorPort;
+  /** Runs out of process in production (sandboxed worker with a hard time limit). */
+  readonly html: HtmlExtractorPort;
+}
+
+type ExtractionAttempt = { ok: true; value: HtmlExtraction } | { ok: false; capture: Capture };
+
+async function extractOrFail(
+  deps: CaptureDeps,
+  html: string,
+  finalUrl: string,
+  contentLanguage: string | undefined,
+): Promise<ExtractionAttempt> {
+  try {
+    return { ok: true, value: await deps.html.extract(html, finalUrl, contentLanguage) };
+  } catch (error) {
+    if (error instanceof HtmlExtractionError) {
+      return {
+        ok: false,
+        capture: { kind: 'NOT_FETCHED', reason: 'EXTRACTION_FAILED', detail: error.message },
+      };
+    }
+    throw error;
+  }
 }
 
 function errorCodeForStatus(status: number): SnapshotErrorCode {
@@ -126,7 +151,9 @@ export async function capturePage(url: URL, deps: CaptureDeps): Promise<Capture>
     };
   }
 
-  const t1Text = extractHtml(html, t1.finalUrl, deps.allowlist, t1.headers['content-language']);
+  const t1Attempt = await extractOrFail(deps, html, t1.finalUrl, t1.headers['content-language']);
+  if (!t1Attempt.ok) return t1Attempt.capture;
+  const t1Text = t1Attempt.value;
   if (
     isChallengeGate({
       status: t1.status,
@@ -179,7 +206,9 @@ export async function capturePage(url: URL, deps: CaptureDeps): Promise<Capture>
       errorCode: 'DISALLOWED_REDIRECT',
     };
   }
-  const t2Text = extractHtml(t2.html, t2.finalUrl, deps.allowlist, t2.headers['content-language']);
+  const t2Attempt = await extractOrFail(deps, t2.html, t2.finalUrl, t2.headers['content-language']);
+  if (!t2Attempt.ok) return t2Attempt.capture;
+  const t2Text = t2Attempt.value;
   const t2Waf = isChallengeGate({
     status: t2.status,
     headers: t2.headers,

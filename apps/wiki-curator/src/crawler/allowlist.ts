@@ -10,6 +10,12 @@ export interface AllowlistOptions {
   readonly nonDefaultPortHosts?: ReadonlySet<string>;
 }
 
+/** Structured-clone-safe form of a DomainAllowlist (crosses the extraction worker boundary). */
+export interface AllowlistSnapshot {
+  readonly entries: readonly AllowlistEntry[];
+  readonly nonDefaultPortHosts: readonly string[];
+}
+
 /**
  * Official-domain allowlist matcher (`wiki.official_domain_allowlist`): a host matches an entry when it
  * equals `entry.host`, or is a strict subdomain of it and `allow_subdomains` is true. When several entries
@@ -27,6 +33,16 @@ export class DomainAllowlist {
   constructor(entries: readonly AllowlistEntry[], options: AllowlistOptions = {}) {
     this.byHost = new Map(entries.map((e) => [canonicalHost(e.host), e]));
     this.nonDefaultPortHosts = options.nonDefaultPortHosts ?? new Set();
+  }
+
+  static fromSnapshot(snapshot: AllowlistSnapshot): DomainAllowlist {
+    return new DomainAllowlist(snapshot.entries, {
+      nonDefaultPortHosts: new Set(snapshot.nonDefaultPortHosts),
+    });
+  }
+
+  snapshot(): AllowlistSnapshot {
+    return { entries: [...this.byHost.values()], nonDefaultPortHosts: [...this.nonDefaultPortHosts] };
   }
 
   get size(): number {

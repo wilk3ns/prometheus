@@ -1,4 +1,4 @@
-import type { NotFetchedReason } from '@prometheus/contracts';
+import type { DiscoveredLink, NotFetchedReason } from '@prometheus/contracts';
 
 /** Why a redirect / navigation hop was refused before any body was read. */
 export type HopRefusal = 'DISALLOWED_REDIRECT' | 'BLOCKED_PRIVATE_ADDRESS';
@@ -71,4 +71,21 @@ export class PdfExtractionError extends Error {
 export interface PdfExtractorPort {
   /** @throws PdfExtractionError when the bytes are not a readable PDF. */
   extract(bytes: Uint8Array): Promise<PdfText>;
+}
+
+export interface HtmlExtraction {
+  readonly cleanText: string;
+  readonly cleanCharCount: number;
+  readonly links: readonly DiscoveredLink[];
+  readonly lang: string | null;
+}
+
+export class HtmlExtractionError extends Error {
+  override readonly name = 'HtmlExtractionError';
+}
+
+/** HTML -> clean structured text + allowlisted links (bound to an allowlist at construction). */
+export interface HtmlExtractorPort {
+  /** @throws HtmlExtractionError when extraction fails or exceeds its hard time / memory limit. */
+  extract(html: string, finalUrl: string, contentLanguage: string | undefined): Promise<HtmlExtraction>;
 }

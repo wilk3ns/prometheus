@@ -1,6 +1,6 @@
 import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 import { isIP, type LookupFunction } from 'node:net';
-import { type AddressPolicy, isAddressPermitted } from './address-policy.js';
+import { type AddressPolicy, isAddressPermitted, type LocalExemption } from './address-policy.js';
 import type { DomainAllowlist } from './allowlist.js';
 
 export type GuardDecision = 'OK' | 'DISALLOWED_HOST' | 'BLOCKED_PRIVATE_ADDRESS' | 'DNS_FAILURE';
@@ -38,16 +38,21 @@ export class RequestGuard {
     private readonly resolve: Resolver = systemResolver,
   ) {}
 
-  async check(url: URL): Promise<GuardDecision> {
+  async check(url: URL, exemption: LocalExemption): Promise<GuardDecision> {
     if (!this.allowlist.allows(url)) return 'DISALLOWED_HOST';
-    return this.checkAddressOnly(url);
+    return this.checkAddressOnly(url, exemption);
+  }
+
+  /** True when `hostname` is one of the configured local fixture hosts. */
+  isExemptHost(hostname: string): boolean {
+    return this.addressPolicy.nonPublicAllowedHosts.has(hostname.toLowerCase().replace(/\.$/, ''));
   }
 
   /** Address-only check for browser sub-resources (third-party CDNs allowed, internal networks never). */
-  async checkAddressOnly(url: URL): Promise<GuardDecision> {
+  async checkAddressOnly(url: URL, exemption: LocalExemption): Promise<GuardDecision> {
     const host = url.hostname.replace(/^\[|\]$/g, '');
     if (isIP(host) !== 0)
-      return isAddressPermitted(this.addressPolicy, host, host) ? 'OK' : 'BLOCKED_PRIVATE_ADDRESS';
+      return isAddressPermitted(this.addressPolicy, host, host, exemption) ? 'OK' : 'BLOCKED_PRIVATE_ADDRESS';
     let addresses: readonly string[];
     try {
       addresses = await this.resolve(host);
@@ -55,31 +60,37 @@ export class RequestGuard {
       return 'DNS_FAILURE';
     }
     if (addresses.length === 0) return 'DNS_FAILURE';
-    return addresses.every((a) => isAddressPermitted(this.addressPolicy, a, host))
+    return addresses.every((a) => isAddressPermitted(this.addressPolicy, a, host, exemption))
       ? 'OK'
       : 'BLOCKED_PRIVATE_ADDRESS';
   }
 
-  /** `lookup` for net/tls sockets: resolves, then fails closed if any address is not permitted. */
-  readonly connectLookup: LookupFunction = (hostname, options, callback) => {
-    dnsLookup(hostname, { ...options, all: true }, (error, addresses: LookupAddress[]) => {
-      if (error) {
-        callback(error, '', 0);
-        return;
-      }
-      if (
-        addresses.length === 0 ||
-        !addresses.every((a) => isAddressPermitted(this.addressPolicy, a.address, hostname))
-      ) {
-        callback(new BlockedAddressError(hostname), '', 0);
-        return;
-      }
-      if (options.all === true) {
-        callback(null, addresses);
-        return;
-      }
-      const first = addresses[0] as LookupAddress;
-      callback(null, first.address, first.family);
-    });
-  };
+  /**
+   * `lookup` for net/tls sockets: resolves, then fails closed if any address is not permitted under the
+   * given exemption. Each exemption mode gets its own undici dispatcher, so the connect-time check always
+   * matches the pre-check of the request that opened the socket.
+   */
+  connectLookup(exemption: LocalExemption): LookupFunction {
+    return (hostname, options, callback) => {
+      dnsLookup(hostname, { ...options, all: true }, (error, addresses: LookupAddress[]) => {
+        if (error) {
+          callback(error, '', 0);
+          return;
+        }
+        if (
+          addresses.length === 0 ||
+          !addresses.every((a) => isAddressPermitted(this.addressPolicy, a.address, hostname, exemption))
+        ) {
+          callback(new BlockedAddressError(hostname), '', 0);
+          return;
+        }
+        if (options.all === true) {
+          callback(null, addresses);
+          return;
+        }
+        const first = addresses[0] as LookupAddress;
+        callback(null, first.address, first.family);
+      });
+    };
+  }
 }

@@ -1,6 +1,7 @@
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
 import type { NotFetchedReason } from '@prometheus/contracts';
 import { Agent, request, type Dispatcher } from 'undici';
+import type { LocalExemption } from './address-policy.js';
 import { CRAWL_POLICY } from './policy.js';
 import { BLOCKED_ADDRESS_ERROR_CODE, type GuardDecision, type RequestGuard } from './request-guard.js';
 
@@ -19,6 +20,8 @@ export type HopScope = 'ALLOWLISTED' | 'ANY_PUBLIC_HOST';
 export interface HopRequest {
   readonly url: URL;
   readonly scope: HopScope;
+  /** Whether this request may use the local fixture exemption (see address-policy.ts LocalExemption). */
+  readonly localExemption: LocalExemption;
   readonly signal: AbortSignal;
   readonly method?: string;
   readonly headers?: Readonly<Record<string, string>>;
@@ -123,7 +126,8 @@ function decode(raw: Buffer, encoding: string | undefined, limit: number): Buffe
 export class GuardedHttpClient {
   readonly timeoutMs: number;
   readonly maxBodyBytes: number;
-  private readonly dispatcher: Agent;
+  /** One dispatcher per exemption mode: the connect-time lookup must apply the same rule as the pre-check. */
+  private readonly dispatchers: Readonly<Record<LocalExemption, Agent>>;
 
   constructor(
     private readonly guard: RequestGuard,
@@ -131,11 +135,13 @@ export class GuardedHttpClient {
   ) {
     this.timeoutMs = options.timeoutMs ?? CRAWL_POLICY.tier1TimeoutMs;
     this.maxBodyBytes = options.maxBodyBytes ?? CRAWL_POLICY.maxBodyBytes;
-    this.dispatcher = new Agent({
-      connect: { lookup: guard.connectLookup, timeout: this.timeoutMs },
-      headersTimeout: this.timeoutMs,
-      bodyTimeout: this.timeoutMs,
-    });
+    const agent = (exemption: LocalExemption): Agent =>
+      new Agent({
+        connect: { lookup: guard.connectLookup(exemption), timeout: this.timeoutMs },
+        headersTimeout: this.timeoutMs,
+        bodyTimeout: this.timeoutMs,
+      });
+    this.dispatchers = { ALLOWED: agent('ALLOWED'), DENIED: agent('DENIED') };
   }
 
   private classify(error: unknown): HopResult {
@@ -163,8 +169,8 @@ export class GuardedHttpClient {
   async send(req: HopRequest): Promise<HopResult> {
     const decision =
       req.scope === 'ALLOWLISTED'
-        ? await this.guard.check(req.url)
-        : await this.guard.checkAddressOnly(req.url);
+        ? await this.guard.check(req.url, req.localExemption)
+        : await this.guard.checkAddressOnly(req.url, req.localExemption);
     if (decision !== 'OK') return { kind: 'REFUSED', decision };
 
     const headers: Record<string, string> = {};
@@ -180,7 +186,7 @@ export class GuardedHttpClient {
     try {
       res = await request(req.url, {
         method: req.method ?? 'GET',
-        dispatcher: this.dispatcher,
+        dispatcher: this.dispatchers[req.localExemption],
         signal: req.signal,
         headers,
         ...(req.body !== undefined && req.body.byteLength > 0 ? { body: Buffer.from(req.body) } : {}),
@@ -230,7 +236,15 @@ export class GuardedHttpClient {
     }
   }
 
+  /**
+   * Exemption for requests made on behalf of a page at `pageUrl`: ALLOWED only when that page's own host is a
+   * configured local fixture host (the crawl target itself), DENIED for every other page.
+   */
+  localExemptionFor(pageUrl: URL): LocalExemption {
+    return this.guard.isExemptHost(pageUrl.hostname) ? 'ALLOWED' : 'DENIED';
+  }
+
   async close(): Promise<void> {
-    await this.dispatcher.close();
+    await Promise.all([this.dispatchers.ALLOWED.close(), this.dispatchers.DENIED.close()]);
   }
 }

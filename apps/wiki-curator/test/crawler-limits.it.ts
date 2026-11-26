@@ -111,3 +111,63 @@ describe('[T1-G5][MEDIUM] Tier 2 overall render deadline', () => {
     expect(elapsed).toBeLessThan(8_000);
   });
 });
+
+describe('[LOW-1 c2] the fixture exemption applies only to the crawl target own requests', () => {
+  let h: Harness;
+  beforeAll(async () => {
+    h = await openHarness();
+  });
+  afterAll(async () => h?.close());
+
+  it('a request made on behalf of a non-exempt page cannot reach the exempt localhost fixture', async () => {
+    const id = randomUUID();
+    const signal = AbortSignal.timeout(10_000);
+    const denied = await h.client.send({
+      url: new URL(`${FIXTURE_ORIGIN}/canary/${id}-exempt-denied`),
+      scope: 'ANY_PUBLIC_HOST',
+      localExemption: h.client.localExemptionFor(new URL('https://www.polimi.it/en/')),
+      signal,
+    });
+    expect(denied).toEqual({ kind: 'REFUSED', decision: 'BLOCKED_PRIVATE_ADDRESS' });
+    const allowed = await h.client.send({
+      url: new URL(`${FIXTURE_ORIGIN}/canary/${id}-exempt-allowed`),
+      scope: 'ANY_PUBLIC_HOST',
+      localExemption: h.client.localExemptionFor(new URL(`${FIXTURE_ORIGIN}/js-catalog`)),
+      signal,
+    });
+    expect(allowed).toMatchObject({ kind: 'RESPONSE', status: 200 });
+    const hits = await canaryHits();
+    expect(hits[`${id}-exempt-denied`] ?? 0).toBe(0);
+    expect(hits[`${id}-exempt-allowed`]).toBe(1);
+  });
+});
+
+describe('[LOW-3 c2] Tier 2 per-render aggregate budgets', () => {
+  let h: Harness;
+  beforeAll(async () => {
+    h = await openHarness();
+  });
+  afterAll(async () => h?.close());
+
+  it('a page pulling 6 x 10 MB sub-resources (each under the 15 MB cap) exceeds the 50 MB render budget', async () => {
+    expect(await h.renderer.render(new URL(`${FIXTURE_ORIGIN}/budget-bytes`))).toMatchObject({
+      kind: 'FAILED',
+      reason: 'RENDER_BUDGET_EXCEEDED',
+      detail: expect.stringContaining('byte budget'),
+    });
+  });
+
+  it('a page firing 400 requests exceeds the 250-request render budget', async () => {
+    expect(await h.renderer.render(new URL(`${FIXTURE_ORIGIN}/budget-count`))).toMatchObject({
+      kind: 'FAILED',
+      reason: 'RENDER_BUDGET_EXCEEDED',
+      detail: expect.stringContaining('request budget'),
+    });
+  });
+
+  it('a normal JS catalogue stays well inside both budgets', async () => {
+    expect(await h.renderer.render(new URL(`${FIXTURE_ORIGIN}/js-catalog`))).toMatchObject({
+      kind: 'RENDERED',
+    });
+  });
+});

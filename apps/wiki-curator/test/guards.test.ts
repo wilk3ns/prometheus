@@ -98,12 +98,14 @@ describe('[T1-G4] SSRF address policy (rule 1)', () => {
     const rebinding = new RequestGuard(allowlist, STRICT_ADDRESS_POLICY, () =>
       Promise.resolve(['93.184.216.34', '10.0.0.5']),
     );
-    expect(await rebinding.check(new URL('https://www.pw.edu.pl/'))).toBe('BLOCKED_PRIVATE_ADDRESS');
+    expect(await rebinding.check(new URL('https://www.pw.edu.pl/'), 'ALLOWED')).toBe(
+      'BLOCKED_PRIVATE_ADDRESS',
+    );
     const publicOnly = new RequestGuard(allowlist, STRICT_ADDRESS_POLICY, () =>
       Promise.resolve(['93.184.216.34']),
     );
-    expect(await publicOnly.check(new URL('https://www.pw.edu.pl/'))).toBe('OK');
-    expect(await publicOnly.check(new URL('https://evil.example.com/'))).toBe('DISALLOWED_HOST');
+    expect(await publicOnly.check(new URL('https://www.pw.edu.pl/'), 'ALLOWED')).toBe('OK');
+    expect(await publicOnly.check(new URL('https://evil.example.com/'), 'ALLOWED')).toBe('DISALLOWED_HOST');
   });
 
   it('[LOW-1] local fixture exemption is host-scoped: other hosts and IP literals stay strict', async () => {
@@ -114,12 +116,14 @@ describe('[T1-G4] SSRF address policy (rule 1)', () => {
       { nonPublicAllowedHosts: new Set(['pw.edu.pl']) },
       resolveLoopback,
     );
-    expect(await strict.check(new URL('http://pw.edu.pl/'))).toBe('BLOCKED_PRIVATE_ADDRESS');
-    expect(await local.check(new URL('http://pw.edu.pl/'))).toBe('OK');
+    expect(await strict.check(new URL('http://pw.edu.pl/'), 'ALLOWED')).toBe('BLOCKED_PRIVATE_ADDRESS');
+    expect(await local.check(new URL('http://pw.edu.pl/'), 'ALLOWED')).toBe('OK');
     // a live official host crawled in the same process keeps the private-IP block
-    expect(await local.check(new URL('http://www.pw.edu.pl/'))).toBe('BLOCKED_PRIVATE_ADDRESS');
-    expect(await local.checkAddressOnly(new URL('http://127.0.0.1:8088/'))).toBe('BLOCKED_PRIVATE_ADDRESS');
-    expect(await strict.checkAddressOnly(new URL('http://169.254.169.254/latest/meta-data'))).toBe(
+    expect(await local.check(new URL('http://www.pw.edu.pl/'), 'ALLOWED')).toBe('BLOCKED_PRIVATE_ADDRESS');
+    expect(await local.checkAddressOnly(new URL('http://127.0.0.1:8088/'), 'ALLOWED')).toBe(
+      'BLOCKED_PRIVATE_ADDRESS',
+    );
+    expect(await strict.checkAddressOnly(new URL('http://169.254.169.254/latest/meta-data'), 'ALLOWED')).toBe(
       'BLOCKED_PRIVATE_ADDRESS',
     );
   });
@@ -127,9 +131,34 @@ describe('[T1-G4] SSRF address policy (rule 1)', () => {
   it('connect-time lookup fails closed on a non-public answer (DNS rebinding defence)', async () => {
     const guard = new RequestGuard(allowlist, STRICT_ADDRESS_POLICY);
     const error = await new Promise<unknown>((resolve) => {
-      guard.connectLookup('localhost', {}, (err) => resolve(err));
+      guard.connectLookup('ALLOWED')('localhost', {}, (err) => resolve(err));
     });
     expect(error).toMatchObject({ code: 'ERR_PROMETHEUS_BLOCKED_ADDRESS' });
+  });
+
+  it('[LOW-1 c3] the exemption only applies when the request context allows it (crawl target itself)', async () => {
+    const resolveLoopback = () => Promise.resolve(['127.0.0.1']);
+    const local = new RequestGuard(
+      allowlist,
+      { nonPublicAllowedHosts: new Set(['pw.edu.pl']) },
+      resolveLoopback,
+    );
+    // same exempt host: allowed for the fixture page's own requests, denied for any other page's sub-resources
+    expect(await local.check(new URL('http://pw.edu.pl/'), 'ALLOWED')).toBe('OK');
+    expect(await local.check(new URL('http://pw.edu.pl/'), 'DENIED')).toBe('BLOCKED_PRIVATE_ADDRESS');
+    expect(await local.checkAddressOnly(new URL('http://pw.edu.pl:5432/'), 'DENIED')).toBe(
+      'BLOCKED_PRIVATE_ADDRESS',
+    );
+    // connect-time lookup applies the same rule
+    const lh = new RequestGuard(allowlist, { nonPublicAllowedHosts: new Set(['localhost']) });
+    const viaLookup = (mode: 'ALLOWED' | 'DENIED') =>
+      new Promise<unknown>((resolve) => {
+        lh.connectLookup(mode)('localhost', {}, (err) => resolve(err));
+      });
+    expect(await viaLookup('DENIED')).toMatchObject({ code: 'ERR_PROMETHEUS_BLOCKED_ADDRESS' });
+    expect(await viaLookup('ALLOWED')).toBeNull();
+    expect(local.isExemptHost('PW.EDU.PL.')).toBe(true);
+    expect(local.isExemptHost('www.pw.edu.pl')).toBe(false);
   });
 });
 

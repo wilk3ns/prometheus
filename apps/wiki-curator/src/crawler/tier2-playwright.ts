@@ -9,6 +9,9 @@ import {
   type Request,
   type Route,
 } from 'playwright';
+import type { LocalExemption } from './address-policy.js';
+import { blackholeProxy, HARDENED_CHROMIUM_ARGS, NO_SOCKET_APIS_INIT_SCRIPT } from './browser-hardening.js';
+import { EgressBlackhole } from './egress-blackhole.js';
 import type { GuardedHttpClient, HopResult } from './guarded-http.js';
 import { CRAWL_POLICY } from './policy.js';
 
@@ -17,18 +20,18 @@ import { CRAWL_POLICY } from './policy.js';
  * User-Agent as Tier 1: NO stealth/evasion plugins, NO CAPTCHA solving (challenge pages are detected and
  * recorded upstream, never bypassed).
  *
- * Egress policy (Chromium never opens a network connection itself):
- *  - every HTTP(S) request of every page in the browser context is intercepted (`context.route`) and served
- *    through the GuardedHttpClient: allowlist / public-address pre-check, connect-time address re-check,
- *    15 MB raw+decoded cap, render-wide deadline;
- *  - documents (main frame and iframes) must be on the official allowlist; sub-resources (scripts, XHR,
- *    fetch, CSS, beacons) may come from public third-party hosts, never from non-public addresses;
- *  - main-frame redirects are never handed to Chromium: the hop is recorded, aborted, and `render()`
- *    navigates to the Location itself, so each hop is checked before any request to it is sent;
- *  - popups / any page other than the crawl page are closed and their requests aborted;
- *  - WebSockets are closed before any server contact (`routeWebSocket`; T1 needs none);
- *  - image/media/font requests and analytics trackers are aborted; service workers, downloads, WebRTC
- *    non-proxied UDP and DNS prefetch are disabled.
+ * Egress containment, defence in depth (see browser-hardening.ts):
+ *  1. every HTTP(S) request of every page in the context is intercepted (`context.route`) and fulfilled by
+ *     the GuardedHttpClient (allowlist / public-address pre-check, connect-time re-check, 15 MB cap);
+ *     documents (main frame + iframes) must be allowlisted, sub-resources must be public; main-frame
+ *     redirects are re-navigated only after a guard check; popups are closed; WebSockets are closed
+ *     before connecting;
+ *  2. WebRTC / WebTransport / WebSocketStream are removed from every frame before page scripts run;
+ *  3. Chromium's only route to the network is a fail-closed local proxy (EgressBlackhole) with the
+ *     implicit loopback bypass removed, plus no QUIC and no non-proxied UDP: whatever escapes 1 and 2
+ *     (e.g. from a worker) reaches nothing.
+ * Per render: one wall-clock deadline (25 s), an aggregate request (250) and byte (50 MB) budget, and a
+ * 15 MB cap on the rendered HTML.
  */
 
 const BLOCKED_RESOURCE_TYPES: ReadonlySet<string> = new Set(['image', 'media', 'font']);
@@ -42,7 +45,6 @@ const DROPPED_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
   'connection',
   'keep-alive',
 ]);
-const CHROMIUM_ARGS = ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp', '--dns-prefetch-disable'];
 
 export interface Tier2Options {
   /** Hard wall-clock budget for one render, all hops included (default 25 s). */
@@ -51,15 +53,23 @@ export interface Tier2Options {
   readonly networkIdleCapMs?: number;
   /** Cap on the rendered `outerHTML` (default 15 MB). */
   readonly maxHtmlBytes?: number;
+  /** Aggregate budgets over the document and all sub-resources of one render. */
+  readonly maxRequestsPerRender?: number;
+  readonly maxBytesPerRender?: number;
 }
 
 /** Mutable per-render state shared with the route handler. */
 class NavigationState {
   /** Status of the redirect that led to the navigation currently in flight (0 for the first hop). */
   viaStatus = 0;
+  /** Exemption for requests on behalf of the page currently being navigated (see LocalExemption). */
+  exemption: LocalExemption = 'DENIED';
+  requests = 0;
+  bytes = 0;
   private redirect: { status: number; location: string } | undefined;
   refusal: { status: number; refusedUrl: string; refusal: HopRefusal } | undefined;
   mainFailure: { reason: NotFetchedReason; detail: string } | undefined;
+  budgetExceeded: string | undefined;
 
   setRedirect(r: { status: number; location: string }): void {
     this.redirect = r;
@@ -75,6 +85,8 @@ class NavigationState {
   refused(): RenderOutcome | undefined {
     if (this.refusal) return { kind: 'HOP_REFUSED', ...this.refusal };
     if (this.mainFailure) return { kind: 'FAILED', ...this.mainFailure };
+    if (this.budgetExceeded)
+      return { kind: 'FAILED', reason: 'RENDER_BUDGET_EXCEEDED', detail: this.budgetExceeded };
     return undefined;
   }
 }
@@ -101,9 +113,12 @@ function refusalOf(decision: Extract<HopResult, { kind: 'REFUSED' }>['decision']
 
 export class PlaywrightJsRenderer implements JsRendererPort {
   private browser: Promise<Browser> | undefined;
+  private readonly blackhole = new EgressBlackhole();
   private readonly renderDeadlineMs: number;
   private readonly networkIdleCapMs: number;
   private readonly maxHtmlBytes: number;
+  private readonly maxRequests: number;
+  private readonly maxBytes: number;
 
   constructor(
     private readonly client: GuardedHttpClient,
@@ -113,10 +128,26 @@ export class PlaywrightJsRenderer implements JsRendererPort {
     this.renderDeadlineMs = options.renderDeadlineMs ?? CRAWL_POLICY.tier2RenderDeadlineMs;
     this.networkIdleCapMs = options.networkIdleCapMs ?? CRAWL_POLICY.tier2NetworkIdleCapMs;
     this.maxHtmlBytes = options.maxHtmlBytes ?? CRAWL_POLICY.maxBodyBytes;
+    this.maxRequests = options.maxRequestsPerRender ?? CRAWL_POLICY.tier2MaxRequestsPerRender;
+    this.maxBytes = options.maxBytesPerRender ?? CRAWL_POLICY.tier2MaxBytesPerRender;
+  }
+
+  /** Socket attempts that bypassed layers 1-2 and were swallowed by the fail-closed proxy (should be 0). */
+  get blockedEgressConnections(): number {
+    return this.blackhole.blockedConnections;
   }
 
   private launch(): Promise<Browser> {
-    this.browser ??= chromium.launch({ headless: true, args: CHROMIUM_ARGS });
+    this.browser ??= this.blackhole
+      .start()
+      .then((port) =>
+        chromium.launch({ headless: true, args: [...HARDENED_CHROMIUM_ARGS], proxy: blackholeProxy(port) }),
+      )
+      .catch(async (error: unknown) => {
+        this.browser = undefined; // never cache a failed launch
+        await this.blackhole.stop();
+        throw error;
+      });
     return this.browser;
   }
 
@@ -144,6 +175,7 @@ export class PlaywrightJsRenderer implements JsRendererPort {
         serviceWorkers: 'block',
         acceptDownloads: false,
       });
+      await context.addInitScript({ content: NO_SOCKET_APIS_INIT_SCRIPT });
       const page = await context.newPage();
       const state = new NavigationState();
       context.on('page', (other) => {
@@ -158,7 +190,7 @@ export class PlaywrightJsRenderer implements JsRendererPort {
         }),
       );
 
-      let current = url.href;
+      let current = url;
       let response;
       for (let hop = 0; response === undefined; hop += 1) {
         if (hop > CRAWL_POLICY.maxRedirects) {
@@ -169,9 +201,10 @@ export class PlaywrightJsRenderer implements JsRendererPort {
           };
         }
         state.takeRedirect();
+        state.exemption = this.client.localExemptionFor(current);
         try {
           response =
-            (await page.goto(current, {
+            (await page.goto(current.href, {
               waitUntil: 'domcontentloaded',
               timeout: CRAWL_POLICY.tier2NavigationTimeoutMs,
             })) ?? undefined;
@@ -184,7 +217,7 @@ export class PlaywrightJsRenderer implements JsRendererPort {
           const redirect = state.takeRedirect();
           if (redirect === undefined) return failure(error);
           state.viaStatus = redirect.status;
-          current = redirect.location;
+          current = new URL(redirect.location);
         }
       }
       const refusedEarly = state.refused();
@@ -258,6 +291,16 @@ export class PlaywrightJsRenderer implements JsRendererPort {
       await route.abort('blockedbyclient');
       return;
     }
+    if (state.budgetExceeded !== undefined) {
+      await route.abort('blockedbyclient');
+      return;
+    }
+    state.requests += 1;
+    if (state.requests > this.maxRequests) {
+      state.budgetExceeded = `render request budget exceeded (> ${this.maxRequests} requests)`;
+      await route.abort('blockedbyclient');
+      return;
+    }
 
     const isDocument = request.isNavigationRequest();
     const isMain = isDocument && frame === crawlPage.mainFrame();
@@ -269,6 +312,7 @@ export class PlaywrightJsRenderer implements JsRendererPort {
       const res = await this.client.send({
         url,
         scope: isDocument ? 'ALLOWLISTED' : 'ANY_PUBLIC_HOST',
+        localExemption: state.exemption,
         signal,
         method,
         headers,
@@ -283,6 +327,12 @@ export class PlaywrightJsRenderer implements JsRendererPort {
       if (res.kind === 'FAILED') {
         if (isMain) state.mainFailure = { reason: res.reason, detail: `tier2 main document: ${res.detail}` };
         await route.abort('failed');
+        return;
+      }
+      state.bytes += res.body.byteLength;
+      if (state.bytes > this.maxBytes) {
+        state.budgetExceeded = `render byte budget exceeded (> ${this.maxBytes} bytes)`;
+        await route.abort('blockedbyclient');
         return;
       }
       if (res.redirectTo === undefined) {
@@ -318,5 +368,6 @@ export class PlaywrightJsRenderer implements JsRendererPort {
     const browser = this.browser;
     this.browser = undefined;
     if (browser) await (await browser).close();
+    await this.blackhole.stop();
   }
 }

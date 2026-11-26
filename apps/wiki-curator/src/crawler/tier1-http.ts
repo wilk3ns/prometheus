@@ -45,6 +45,8 @@ export class UndiciHttpFetcher implements HttpFetcherPort {
       const res = await this.client.send({
         url: current,
         scope: 'ALLOWLISTED',
+        // the crawl target's own top-level requests: the only Tier 1 traffic there is
+        localExemption: 'ALLOWED',
         signal,
         headers: { accept: ACCEPT },
         refuseUnreadableTypes: true,

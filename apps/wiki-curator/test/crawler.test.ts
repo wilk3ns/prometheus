@@ -16,6 +16,7 @@ import {
   clock,
   html,
   ids,
+  inProcessHtml,
   longText,
   MemoryBlobStore,
   MemoryRepo,
@@ -42,7 +43,7 @@ function deps(
     html: RENDERED,
   })),
 ): CaptureDeps & { renderer: ScriptedRenderer } {
-  return { allowlist, http, renderer, pdf: twoPagePdf };
+  return { allowlist, http, renderer, pdf: twoPagePdf, html: inProcessHtml(allowlist) };
 }
 
 describe('[T1-G5] tier escalation (rule 2)', () => {
@@ -339,7 +340,7 @@ describe('[HIGH-2] per-URL and per-target failure isolation', () => {
     });
     const repo = new MemoryRepo();
     const runner = new CrawlRunner({
-      capture: { allowlist, http, renderer: crashing, pdf: twoPagePdf },
+      capture: { allowlist, http, renderer: crashing, pdf: twoPagePdf, html: inProcessHtml(allowlist) },
       snapshots: new SnapshotStore(new MemoryBlobStore(), repo, ids(), clock),
       selector: new KeywordLinkSelector(),
       repo,
@@ -371,6 +372,7 @@ describe('[HIGH-2] per-URL and per-target failure isolation', () => {
         http,
         renderer: new ScriptedRenderer(() => ({ kind: 'FAILED', reason: 'RENDER_FAILED', detail: '' })),
         pdf: { extract: () => Promise.reject(new RangeError('Invalid array length')) },
+        html: inProcessHtml(allowlist),
       },
       snapshots: new SnapshotStore(new MemoryBlobStore(), repo, ids(), clock),
       selector: new KeywordLinkSelector(),

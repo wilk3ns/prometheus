@@ -80,8 +80,22 @@ export interface AddressPolicy {
 
 export const STRICT_ADDRESS_POLICY: AddressPolicy = { nonPublicAllowedHosts: new Set() };
 
-export function isAddressPermitted(policy: AddressPolicy, address: string, hostname: string): boolean {
+/**
+ * Whether a request may use the local fixture exemption at all. Only the crawl target's own top-level
+ * requests (Tier 1 fetches and the documents/sub-resources of a page whose own host is an exempt fixture
+ * host) are ALLOWED; sub-resources requested by any other page (e.g. a live official page's JavaScript)
+ * are DENIED, so they can never reach `localhost` services even in the local profile.
+ */
+export type LocalExemption = 'ALLOWED' | 'DENIED';
+
+export function isAddressPermitted(
+  policy: AddressPolicy,
+  address: string,
+  hostname: string,
+  exemption: LocalExemption,
+): boolean {
   if (!isNonPublicAddress(address)) return true;
+  if (exemption === 'DENIED') return false;
   const host = hostname.toLowerCase().replace(/\.$/, '');
   return isIP(host.replace(/^\[|\]$/g, '')) === 0 && policy.nonPublicAllowedHosts.has(host);
 }

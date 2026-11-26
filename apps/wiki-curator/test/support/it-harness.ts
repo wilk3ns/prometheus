@@ -8,7 +8,7 @@ import { openRuntime, type CuratorRuntime } from '../../src/bootstrap.js';
 import { DomainAllowlist } from '../../src/crawler/allowlist.js';
 import { CrawlRunner } from '../../src/crawler/crawl-runner.js';
 import { KeywordLinkSelector } from '../../src/crawler/link-selector.js';
-import { PdfjsTextExtractor } from '../../src/crawler/pdf-extractor.js';
+import { SandboxedHtmlExtractor, SandboxedPdfExtractor } from '../../src/crawler/extraction-sandbox.js';
 import { STRICT_ADDRESS_POLICY } from '../../src/crawler/address-policy.js';
 import { GuardedHttpClient, type GuardedHttpOptions } from '../../src/crawler/guarded-http.js';
 import { RequestGuard, type Resolver } from '../../src/crawler/request-guard.js';
@@ -16,6 +16,7 @@ import { SnapshotStore } from '../../src/crawler/snapshot-store.js';
 import { UndiciHttpFetcher } from '../../src/crawler/tier1-http.js';
 import { PlaywrightJsRenderer, type Tier2Options } from '../../src/crawler/tier2-playwright.js';
 import { fixtureAllowlistEntry } from './fixtures.js';
+import { testSandbox } from './sandbox.js';
 
 export const FIXTURE_ORIGIN = process.env['FIXTURE_SITES_ORIGIN'] ?? 'http://localhost:8088';
 export const FIXTURE_HOST = new URL(FIXTURE_ORIGIN).hostname;
@@ -87,8 +88,15 @@ export async function openHarness(opts: HarnessOptions = {}): Promise<Harness> {
   const renderer = new CountingRenderer(
     new PlaywrightJsRenderer(client, config.crawler.userAgent, opts.tier2),
   );
+  const sandbox = testSandbox();
   const runner = new CrawlRunner({
-    capture: { allowlist, http, renderer, pdf: new PdfjsTextExtractor() },
+    capture: {
+      allowlist,
+      http,
+      renderer,
+      pdf: new SandboxedPdfExtractor(sandbox),
+      html: new SandboxedHtmlExtractor(sandbox, allowlist),
+    },
     snapshots: new SnapshotStore(runtime.blobs, runtime.repo, runtime.ids, runtime.clock),
     selector: new KeywordLinkSelector(),
     repo: runtime.repo,
@@ -153,6 +161,11 @@ export async function openHarness(opts: HarnessOptions = {}): Promise<Harness> {
 }
 
 /** Canary hit counts recorded by the fixture server (read directly, outside the crawler's guard). */
+export async function rawCanary(): Promise<{ tcp: number; udp: number }> {
+  const res = await fetch(`${FIXTURE_ORIGIN}/canary-raw`);
+  return (await res.json()) as { tcp: number; udp: number };
+}
+
 export async function canaryHits(): Promise<Record<string, number>> {
   const res = await fetch(`${FIXTURE_ORIGIN}/canary-hits`);
   return (await res.json()) as Record<string, number>;

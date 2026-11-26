@@ -7,7 +7,11 @@ import { DomainAllowlist } from './crawler/allowlist.js';
 import { GuardedHttpClient } from './crawler/guarded-http.js';
 import { CrawlRunner } from './crawler/crawl-runner.js';
 import { KeywordLinkSelector } from './crawler/link-selector.js';
-import { PdfjsTextExtractor } from './crawler/pdf-extractor.js';
+import {
+  ExtractionSandbox,
+  SandboxedHtmlExtractor,
+  SandboxedPdfExtractor,
+} from './crawler/extraction-sandbox.js';
 import { RequestGuard } from './crawler/request-guard.js';
 import { SnapshotStore } from './crawler/snapshot-store.js';
 import { UndiciHttpFetcher } from './crawler/tier1-http.js';
@@ -79,8 +83,16 @@ export async function openCrawlSession(runtime: CuratorRuntime): Promise<CrawlSe
   const client = new GuardedHttpClient(guard, { userAgent: runtime.config.crawler.userAgent });
   const http = new UndiciHttpFetcher(client);
   const renderer = new PlaywrightJsRenderer(client, runtime.config.crawler.userAgent);
+  // Extraction runs in terminable worker threads (hard wall-clock + heap limits).
+  const sandbox = new ExtractionSandbox();
   const runner = new CrawlRunner({
-    capture: { allowlist, http, renderer, pdf: new PdfjsTextExtractor() },
+    capture: {
+      allowlist,
+      http,
+      renderer,
+      pdf: new SandboxedPdfExtractor(sandbox),
+      html: new SandboxedHtmlExtractor(sandbox, allowlist),
+    },
     snapshots: new SnapshotStore(runtime.blobs, runtime.repo, runtime.ids, runtime.clock),
     selector: new KeywordLinkSelector(),
     repo: runtime.repo,

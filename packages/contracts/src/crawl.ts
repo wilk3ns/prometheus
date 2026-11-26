@@ -25,6 +25,8 @@ export const NotFetchedReason = z.enum([
   'EXTRACTION_FAILED',
   /** Unexpected error while capturing this URL; isolated so the rest of the crawl continues. */
   'CAPTURE_FAILED',
+  /** Tier 2 page exceeded the per-render aggregate request / byte budget. */
+  'RENDER_BUDGET_EXCEEDED',
 ]);
 export type NotFetchedReason = z.infer<typeof NotFetchedReason>;
 

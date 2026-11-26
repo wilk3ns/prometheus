@@ -13,6 +13,11 @@ export const CRAWL_POLICY = {
   tier2NetworkIdleCapMs: 10_000,
   /** Tier 2: one wall-clock budget per render (navigation hops + networkidle + serialisation). */
   tier2RenderDeadlineMs: 25_000,
+  /** Tier 2 per-render aggregate budgets across the document and all sub-resources. */
+  tier2MaxRequestsPerRender: 250,
+  tier2MaxBytesPerRender: 50 * 1024 * 1024,
+  /** Hard wall-clock limit for one sandboxed HTML extraction (worker is terminated beyond it). */
+  htmlExtractionTimeoutMs: 20_000,
   /** PDF extraction bounds (page count fits wiki.source_snapshot.page_count smallint). */
   pdfMaxPages: 2_000,
   pdfTimeoutMs: 60_000,

@@ -76,6 +76,9 @@ services:
       PORT: '8088'
     ports:
       - '127.0.0.1:${FIXTURE_SITES_PORT:-8088}:8088'
+      # raw TCP+UDP egress canary (counts every connection / datagram; see fixture-sites/probes.mjs)
+      - '127.0.0.1:${FIXTURE_CANARY_PORT:-8089}:8089/tcp'
+      - '127.0.0.1:${FIXTURE_CANARY_PORT:-8089}:8089/udp'
     volumes:
       - ./fixture-sites:/srv:ro
     healthcheck:
