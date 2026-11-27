@@ -29,7 +29,9 @@ export type HttpFetchOutcome =
       readonly requestedUrl: string;
       readonly reason: NotFetchedReason;
       readonly detail: string;
-    };
+    }
+  /** robots.txt disallows the URL for `*`: nothing was requested (ENG-T2 §0 Q3). */
+  | { readonly kind: 'ROBOTS_DISALLOWED'; readonly requestedUrl: string };
 
 /** Tier 1: plain HTTP GET with per-hop policy checks and body sniffing. */
 export interface HttpFetcherPort {
@@ -50,11 +52,18 @@ export type RenderOutcome =
       readonly refusedUrl: string;
       readonly refusal: HopRefusal;
     }
-  | { readonly kind: 'FAILED'; readonly reason: NotFetchedReason; readonly detail: string };
+  | { readonly kind: 'FAILED'; readonly reason: NotFetchedReason; readonly detail: string }
+  /** robots.txt disallows the URL for `*`: not rendered (ENG-T2 §0 Q3). */
+  | { readonly kind: 'ROBOTS_DISALLOWED' };
 
 /** Tier 2: headless browser rendering for JS/AJAX catalogs. */
 export interface JsRendererPort {
   render(url: URL): Promise<RenderOutcome>;
+  /**
+   * Cumulative count of browser sockets that escaped the in-browser layers and were swallowed by the
+   * fail-closed proxy (ENG-T2 §0 Q5 `blocked_proxy_requests_count`). Callers diff it around a capture.
+   */
+  blockedProxyRequests(): number;
   close(): Promise<void>;
 }
 

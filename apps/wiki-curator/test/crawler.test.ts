@@ -404,6 +404,7 @@ describe('[HIGH-2] per-URL and per-target failure isolation', () => {
               startedAt: '',
               finishedAt: '',
               fetchedCount: 0,
+              blockedProxyRequestsCount: 0,
               outcomes: [],
             }),
       (line) => lines.push(line),

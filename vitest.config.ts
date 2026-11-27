@@ -16,6 +16,7 @@ const workspaceSources = {
       '@prometheus/infra-adapters/local': src('./packages/infra-adapters/local/index.ts'),
       '@prometheus/infra-adapters/azure': src('./packages/infra-adapters/azure/index.ts'),
       '@prometheus/db': src('./packages/db/src/index.ts'),
+      '@prometheus/ai': src('./packages/ai/src/index.ts'),
     },
   },
 };
@@ -33,17 +34,37 @@ export default defineConfig({
     projects: [
       {
         ...workspaceSources,
-        test: { name: 'unit', include: ['{packages,apps}/**/test/**/*.test.ts'], environment: 'node' },
+        test: {
+          name: 'unit',
+          include: ['{packages,apps}/**/test/**/*.test.ts'],
+          exclude: ['**/*.golden.test.ts', '**/node_modules/**'],
+          environment: 'node',
+        },
       },
       {
         ...workspaceSources,
         test: {
           name: 'it',
           include: ['{packages,apps}/**/test/**/*.it.ts'],
+          exclude: ['**/*.golden.it.ts', '**/node_modules/**'],
           environment: 'node',
           globalSetup: ['./scripts/it-global-setup.mjs'],
           env: itEnv(),
           // ITs share one database, bucket and fixture server; run files sequentially for determinism.
+          fileParallelism: false,
+          testTimeout: 60_000,
+          hookTimeout: 120_000,
+        },
+      },
+      {
+        // Golden-record gates (6, 7, 9): need PROMETHEUS_VAULT_DIR (fixtures live only in the vault) and the stack.
+        ...workspaceSources,
+        test: {
+          name: 'golden',
+          include: ['tests/e2e/test/**/*.golden.{test,it}.ts'],
+          environment: 'node',
+          globalSetup: ['./scripts/it-global-setup.mjs'],
+          env: itEnv(),
           fileParallelism: false,
           testTimeout: 60_000,
           hookTimeout: 120_000,

@@ -1,13 +1,28 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { loadWikiCuratorConfig } from '@prometheus/config';
-import { openCrawlSession, openRuntime } from './bootstrap.js';
+import { isAbsolute } from 'node:path';
+import { AdmissionSeason } from '@prometheus/contracts';
+import { loadAiConfig, loadCacheConfig, loadWikiCuratorConfig } from '@prometheus/config';
+import {
+  openCrawlSession,
+  openDurableCurator,
+  openModelRouter,
+  openRuntime,
+  openWikiServices,
+  type CuratorRuntime,
+} from './bootstrap.js';
+import { importGolden, readGoldenPlan } from './curator/golden-importer.js';
+import { layerForHint } from './curator/layers.js';
+import type { BaselineTargetSpec } from './curator/workflows.js';
 import { runCrawlBatch } from './ops/crawl-batch.js';
 import { applySeed, readSeedFile } from './seed/seed.js';
 
 const USAGE = `usage:
-  wiki-curator seed  --file <absolute path to seed-targets-v1.0 JSON>
-  wiki-curator crawl --target <target_key> | --all`;
+  wiki-curator seed           --file <absolute path to seed-targets-v1.0 JSON>
+  wiki-curator crawl          --target <target_key> | --all
+  wiki-curator import-golden  --file <absolute path to a wiki-v2.0 golden JSON>
+  wiki-curator verify-target  --target <target_key> [--node-key <key>] [--season <YYYY-FALL>]
+  wiki-curator build-baseline --season <YYYY-FALL> --batch <id> (--target <target_key> | --all)`;
 
 class UsageError extends Error {
   override readonly name = 'UsageError';
@@ -21,6 +36,9 @@ async function main(argv: readonly string[]): Promise<void> {
       file: { type: 'string' },
       target: { type: 'string' },
       all: { type: 'boolean', default: false },
+      season: { type: 'string' },
+      batch: { type: 'string' },
+      'node-key': { type: 'string' },
     },
     strict: true,
   });
@@ -70,7 +88,96 @@ async function main(argv: readonly string[]): Promise<void> {
     return;
   }
 
+  if (command === 'import-golden') {
+    if (!values.file || !isAbsolute(values.file))
+      throw new UsageError('import-golden requires an absolute --file');
+    // map + validate (and fail on any TODO_RULING) before opening a single connection
+    const plan = await readGoldenPlan(values.file);
+    await withWiki(async (runtime, services) => {
+      const result = await importGolden({ ...services, clock: runtime.clock }, plan);
+      console.log(
+        JSON.stringify({
+          command: 'import-golden',
+          file: result.file,
+          compiledKey: result.compiledKey,
+          nodes: result.nodes,
+          cards: result.cards.map((c) => ({ kind: c.kind, nodeId: c.node_id, estTokens: c.est_tokens })),
+          lockConflicts: result.lockConflicts,
+        }),
+      );
+    });
+    return;
+  }
+
+  if (command === 'verify-target') {
+    if (!values.target) throw new UsageError('verify-target requires --target');
+    const targetKey = values.target;
+    await withWiki(async (runtime, services) => {
+      const target = await runtime.repo.findTargetByKey(targetKey);
+      if (!target) throw new UsageError(`unknown target_key ${targetKey}`);
+      const layer = layerForHint(target.layerHint);
+      const nodeKey = values['node-key'] ?? (layer === 'PROGRAM_SPEC' ? targetKey : undefined);
+      if (nodeKey === undefined) throw new UsageError(`${layer} targets need --node-key`);
+      const season = AdmissionSeason.parse(values.season ?? nodeKey.slice(nodeKey.lastIndexOf(':') + 1));
+      const router = await openModelRouter(runtime, loadAiConfig(process.env));
+      const durable = await openDurableCurator(runtime, services, router);
+      try {
+        const existing = await services.layers.findNode(layer, nodeKey);
+        const result = await durable.workflows.verify(
+          { layer, nodeKey, season, targetKey },
+          existing?.version ?? 0,
+        );
+        console.log(JSON.stringify({ command: 'verify-target', ...result, cards: result.cards.length }));
+        if (result.status === 'ABORTED') process.exitCode = 1;
+      } finally {
+        await durable.close();
+      }
+    });
+    return;
+  }
+
+  if (command === 'build-baseline') {
+    if (!values.season || !values.batch) throw new UsageError('build-baseline requires --season and --batch');
+    if (!values.target === !values.all)
+      throw new UsageError('build-baseline requires exactly one of --target or --all');
+    const season = AdmissionSeason.parse(values.season);
+    const batch = values.batch;
+    await withWiki(async (runtime, services) => {
+      const rows = values.target
+        ? [await runtime.repo.findTargetByKey(values.target)].filter((t) => t !== undefined)
+        : await runtime.repo.listActiveTargets();
+      if (rows.length === 0) throw new UsageError('no crawl targets selected');
+      const specs: BaselineTargetSpec[] = rows.map((t) => {
+        const layer = layerForHint(t.layerHint);
+        return { targetKey: t.targetKey, layer, nodeKey: layer === 'PROGRAM_SPEC' ? t.targetKey : null };
+      });
+      const router = await openModelRouter(runtime, loadAiConfig(process.env));
+      const durable = await openDurableCurator(runtime, services, router);
+      try {
+        const result = await durable.workflows.baseline(season, batch, specs);
+        console.log(JSON.stringify({ command: 'build-baseline', ...result }));
+        if (result.targets.some((t) => t.status === 'ABORTED')) process.exitCode = 1;
+      } finally {
+        await durable.close();
+      }
+    });
+    return;
+  }
+
   throw new UsageError(`unknown command ${command ?? ''}`);
+}
+
+async function withWiki(
+  work: (runtime: CuratorRuntime, services: ReturnType<typeof openWikiServices>) => Promise<void>,
+): Promise<void> {
+  const runtime = await openRuntime(loadWikiCuratorConfig(process.env));
+  const services = openWikiServices(runtime, loadCacheConfig(process.env));
+  try {
+    await work(runtime, services);
+  } finally {
+    await services.close();
+    await runtime.close();
+  }
 }
 
 main(process.argv.slice(2)).catch((error: unknown) => {

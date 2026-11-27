@@ -9,6 +9,8 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S, I | undefined, U>
   : ColumnType<T, T | undefined, T>;
 
+export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
+
 export type Json = JsonValue;
 
 export type JsonArray = JsonValue[];
@@ -21,7 +23,64 @@ export type JsonPrimitive = boolean | number | string | null;
 
 export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
 
+export type Numeric = ColumnType<string, number | string, number | string>;
+
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
+
+export interface EconAiUsageLedger {
+  call_key: string | null;
+  created_at: Generated<Timestamp>;
+  estimated_cost_usd: Generated<Numeric>;
+  family: string;
+  id: string;
+  idempotency_key: string;
+  input_tokens: Generated<number>;
+  latency_ms: Generated<number>;
+  model_or_sku: string;
+  outcome: string;
+  output_tokens: Generated<number>;
+  prompt_hash: string;
+  prompt_id: string;
+  prompt_version: string;
+  provider: string;
+  route: string;
+  subsystem: string;
+}
+
+export interface EconCallBudget {
+  attempts_count: Generated<number>;
+  call_key: string;
+  cap_usd: Numeric;
+  created_at: Generated<Timestamp>;
+  reserved_usd: Generated<Numeric>;
+  route: string;
+}
+
+export interface EconRateCard {
+  model_or_sku: string;
+  provider: string;
+  unit: string;
+  usd_per_unit: Numeric;
+  valid_from: Generated<string>;
+}
+
+export interface WikiCityProfile {
+  agent_slice_card_json: Json | null;
+  attributes_json: Json;
+  citations_json: Generated<Json>;
+  city_name_en: string;
+  country_iso2: string;
+  id: string;
+  locked_fields_json: Generated<Json>;
+  minor_consents_json: Generated<Json>;
+  monthly_living_max_eur: number | null;
+  monthly_living_min_eur: number | null;
+  slot_completeness_json: Generated<Json>;
+  verification_depth: string;
+  verification_score: Numeric | null;
+  verified_at: Generated<Timestamp>;
+  version: Generated<number>;
+}
 
 export interface WikiCrawlTarget {
   active: Generated<boolean>;
@@ -36,6 +95,32 @@ export interface WikiCrawlTarget {
   target_key: string;
 }
 
+export interface WikiDestinationCountryRule {
+  admission_season: string;
+  citations_json: Generated<Json>;
+  country_iso2: string;
+  id: string;
+  locked_fields_json: Generated<Json>;
+  rules_payload_json: Json;
+  slot_completeness_json: Generated<Json>;
+  verification_depth: string;
+  verification_score: Numeric | null;
+  verified_at: Generated<Timestamp>;
+  version: Generated<number>;
+}
+
+export interface WikiNodeRevision {
+  actor: string;
+  after_json: Json;
+  before_json: Json | null;
+  created_at: Generated<Timestamp>;
+  id: string;
+  layer: string;
+  node_key: string;
+  reason: string;
+  version: number;
+}
+
 export interface WikiOfficialDomainAllowlist {
   allow_subdomains: Generated<boolean>;
   country_iso2: string;
@@ -44,6 +129,83 @@ export interface WikiOfficialDomainAllowlist {
   host: string;
   notes: string | null;
   org_kind: string;
+}
+
+export interface WikiOriginEquivalencyRule {
+  admission_season: string;
+  citations_json: Generated<Json>;
+  citizenship_country: string;
+  destination_country_iso2: string;
+  diploma_origin_country: string;
+  diploma_type: string;
+  e_apostille_accepted: Generated<boolean>;
+  equivalency_policy: string;
+  id: string;
+  legalization_rules_json: Json;
+  locked_fields_json: Generated<Json>;
+  minor_consents_json: Generated<Json>;
+  national_recognition_lead_days: Generated<number>;
+  paper_apostille_accepted: Generated<boolean>;
+  ru_sector_translation_exempt: Generated<boolean>;
+  slot_completeness_json: Generated<Json>;
+  verification_depth: string;
+  verification_score: Numeric | null;
+  verified_at: Generated<Timestamp>;
+  version: Generated<number>;
+}
+
+export interface WikiProgram {
+  created_at: Generated<Timestamp>;
+  degree_level: string;
+  duration_semesters: number;
+  ects_total: number | null;
+  field_code: string;
+  id: string;
+  instruction_language: string;
+  name_en: string;
+  name_local: string | null;
+  official_program_url: string;
+  university_id: string;
+}
+
+export interface WikiProgramEmbedding {
+  embedding: string | null;
+  model_id: string;
+  program_id: string;
+  search_text: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface WikiProgramSeasonSpec {
+  accepted_prior_fields_json: Json;
+  admission_season: string;
+  agent_slice_card_json: Json | null;
+  app_window_close_at: Timestamp;
+  app_window_open_at: Timestamp | null;
+  citations_json: Generated<Json>;
+  classes_start_date: string | null;
+  high_school_emi_accepted: Generated<boolean>;
+  id: string;
+  qualified_docs_deadline_at: Timestamp | null;
+  locked_fields_json: Generated<Json>;
+  min_bsc_emi_pct: number | null;
+  min_english_requirements_json: Json;
+  min_gpa_100: Numeric | null;
+  min_math_100: Numeric | null;
+  official_portal_fee_eur_cents: Int8 | null;
+  predicted_grades_accepted: boolean;
+  program_id: string;
+  program_requirements_json: Json;
+  required_entrance_exams_json: Generated<Json>;
+  scholarship_waiver_codes_json: Generated<Json>;
+  schooling_11yr_override: string | null;
+  slot_completeness_json: Generated<Json>;
+  tuition_annual_eur: number;
+  verification_depth: string;
+  verification_score: Numeric | null;
+  verified_at: Generated<Timestamp>;
+  version: Generated<number>;
+  wiki_status: Generated<string>;
 }
 
 export interface WikiSourceSnapshot {
@@ -67,8 +229,70 @@ export interface WikiSourceSnapshot {
   target_id: string | null;
 }
 
+export interface WikiUniversity {
+  agent_slice_card_json: Json | null;
+  citations_json: Generated<Json>;
+  city_id: string;
+  country_iso2: string;
+  credit_card_accepted: Generated<boolean>;
+  general_rules_json: Json;
+  id: string;
+  institution_type: string;
+  locked_fields_json: Generated<Json>;
+  minor_consents_json: Generated<Json>;
+  name_en: string;
+  name_local: string | null;
+  official_domain: string;
+  official_email_domains_json: Generated<Json>;
+  portal_url: string | null;
+  pricing_tier_code: string;
+  primary_portal_type: string;
+  sends_email_notifications: Generated<boolean>;
+  slot_completeness_json: Generated<Json>;
+  verification_depth: string;
+  verification_score: Numeric | null;
+  verified_at: Generated<Timestamp>;
+  version: Generated<number>;
+}
+
+export interface WikiUniversityHousing {
+  agent_slice_card_json: Json | null;
+  citations_json: Generated<Json>;
+  critical_rules_json: Json;
+  halls_json: Generated<Json>;
+  id: string;
+  locked_fields_json: Generated<Json>;
+  monthly_max_eur: number | null;
+  monthly_min_eur: number | null;
+  non_refundable_on_visa_denial: Generated<boolean>;
+  official_info_url: string;
+  portal_url: string | null;
+  rate_pdf_url: string | null;
+  rates_season: string;
+  slot_completeness_json: Generated<Json>;
+  subsidized_places: number | null;
+  total_places: number | null;
+  university_id: string;
+  verification_depth: string;
+  verification_score: Numeric | null;
+  verified_at: Generated<Timestamp>;
+  version: Generated<number>;
+}
+
 export interface DB {
+  "econ.ai_usage_ledger": EconAiUsageLedger;
+  "econ.call_budget": EconCallBudget;
+  "econ.rate_card": EconRateCard;
+  "wiki.city_profile": WikiCityProfile;
   "wiki.crawl_target": WikiCrawlTarget;
+  "wiki.destination_country_rule": WikiDestinationCountryRule;
+  "wiki.node_revision": WikiNodeRevision;
   "wiki.official_domain_allowlist": WikiOfficialDomainAllowlist;
+  "wiki.origin_equivalency_rule": WikiOriginEquivalencyRule;
+  "wiki.program": WikiProgram;
+  "wiki.program_embedding": WikiProgramEmbedding;
+  "wiki.program_season_spec": WikiProgramSeasonSpec;
   "wiki.source_snapshot": WikiSourceSnapshot;
+  "wiki.university": WikiUniversity;
+  "wiki.university_housing": WikiUniversityHousing;
 }

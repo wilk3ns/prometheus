@@ -36,6 +36,8 @@ export class CrawlRunner {
     const maxPages = Math.min(Math.max(target.maxPages, 1), CRAWL_POLICY.maxPages);
     const outcomes: UrlCrawlOutcome[] = [];
     const seen = new Set<string>();
+    // Whole-crawl delta (covers captures that end as errors too), surfaced per ENG-T2 §0 Q5.
+    const proxyHitsBefore = this.deps.capture.renderer.blockedProxyRequests();
     let fetched = 0;
 
     let frontier: string[] = [];
@@ -92,6 +94,7 @@ export class CrawlRunner {
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
       fetchedCount: fetched,
+      blockedProxyRequestsCount: this.deps.capture.renderer.blockedProxyRequests() - proxyHitsBefore,
       outcomes,
     };
   }
@@ -149,6 +152,7 @@ export class CrawlRunner {
         rawBlobCreated: stored.rawBlobCreated,
         textBlobCreated: stored.textBlobCreated,
         discoveredLinkCount: capture.links.length,
+        blockedProxyRequestsCount: capture.blockedProxyRequestsCount,
       },
       links: capture.links,
       finalUrl: capture.finalUrl,

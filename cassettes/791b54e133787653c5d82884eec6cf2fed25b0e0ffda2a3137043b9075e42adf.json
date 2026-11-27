@@ -1,0 +1,17 @@
+{
+  "key": "791b54e133787653c5d82884eec6cf2fed25b0e0ffda2a3137043b9075e42adf",
+  "material": {
+    "route": "RTE-wiki.deep_verify",
+    "promptHash": "205d8a3ee45c8b8e10373d3728b9320b560166584e1c3e293ef596a1d5d062a4",
+    "tier": "oa.flagship",
+    "excludeFamily": "google-gemini",
+    "inputHash": "893ea268c30ef6a6ef824e0fd64528baf80fe3786064d63c271ea2026626f53c"
+  },
+  "note": "curator-verify euvsnoneu round 1: Agent B (deep_verify, oa.flagship, excludes google-gemini) + euvsnoneu round 2: Agent B (deep_verify, oa.flagship, excludes google-gemini)",
+  "response": {
+    "kind": "GENERATE",
+    "text": "{\"verification_score\":0.7,\"checked_paths\":[\"tuition_annual_eur\",\"scholarship_waiver_codes_json\",\"accepted_prior_fields_json\",\"predicted_grades_accepted\",\"min_english_requirements_json\",\"required_entrance_exams_json\",\"app_window_close_at\",\"program.degree_level\",\"program.instruction_language\"],\"discrepancies\":[{\"field_path\":\"app_window_close_at\",\"kind\":\"EU_VS_NONEU\",\"detail\":\"31 August 2027 is the EU deadline; the Non-EU deadline is 15 July 2027.\"}]}",
+    "inputTokens": 2900,
+    "outputTokens": 300
+  }
+}

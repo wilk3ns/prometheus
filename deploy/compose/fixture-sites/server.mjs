@@ -50,6 +50,19 @@ const server = createServer(async (req, res) => {
   const origin = `http://${req.headers.host ?? `localhost:${port}`}`;
 
   if (path === '/healthz') return send(res, 200, 'text/plain', 'ok');
+  // ENG-T2 Q3 politeness ITs: `/private/` is disallowed for every user agent; Crawl-delay 2 s.
+  if (path === '/robots.txt') {
+    return send(
+      res,
+      200,
+      'text/plain',
+      ['User-agent: *', 'Disallow: /private/', 'Crawl-delay: 2', ''].join(String.fromCharCode(10)),
+    );
+  }
+  if (path.startsWith('/private/')) {
+    hitCanary(`private:${path}`);
+    return send(res, 200, 'text/html; charset=utf-8', `<html><body><p>${FILLER}</p></body></html>`);
+  }
   if (path.startsWith('/canary/')) {
     hitCanary(path.slice('/canary/'.length));
     return send(res, 200, 'text/html', '<html><body>canary</body></html>');

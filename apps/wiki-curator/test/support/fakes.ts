@@ -98,6 +98,9 @@ export class ScriptedRenderer implements JsRendererPort {
     this.rendered.push(url.href);
     return Promise.resolve(this.respond(url.href));
   }
+  blockedProxyRequests(): number {
+    return 0;
+  }
   close(): Promise<void> {
     return Promise.resolve();
   }

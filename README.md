@@ -1,6 +1,34 @@
-# Prometheus — monorepo (Tranche T1: core + 2-tier official crawler & snapshot engine)
+# Prometheus — monorepo (Tranches T1 + T2)
 
-Build spec: vault `engineering/02-active-tranche.md` (ENG-T1). Only T1 is implemented here.
+Build spec: vault `engineering/02-active-tranche.md`. T1 = official crawler & snapshot engine; T2 = Knowledge
+Wiki wiki-v2.0 (6 layers), cross-family ModelRouter + dual-pass verifier (DBOS WF-03 / WF-19), <350-token Slice
+Cards, and the $0 deterministic matcher in `apps/core`.
+
+## T2 at a glance
+
+| Path                            | Purpose                                                                                                                                                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/ai`                   | ModelRouter (route policy, GR-AI-009 family exclusion, PII gating, atomic `econ.call_budget` reservation, ledger), untrusted-text fencing, hash-locked prompts, OpenAI / Gemini / replay adapters |
+| `apps/wiki-curator/src/curator` | validators, publish gate, 404 healer, Slice Card compiler, materializer, DBOS workflows, golden importer (`golden-mapping.ts` = the only fixture interpretation)                                  |
+| `apps/core`                     | `matching` module (pure L1 engine, L2 pg_trgm/pgvector, L3 boost limited to L1 results) + Hono dev server; connects ONLY as `app_core`                                                            |
+| `cassettes/`                    | committed replay cassettes (`AI_MODE=replay` default: zero API keys); regenerate with `UPDATE_CASSETTES=1 pnpm test`                                                                              |
+| `tests/e2e`                     | golden-record gates (6/7) and `smoke-t2.ts` (gate 9); need `PROMETHEUS_VAULT_DIR`                                                                                                                 |
+
+```sh
+pnpm test                    # unit (no infrastructure)
+pnpm test:it                 # integration (stack up)
+PROMETHEUS_VAULT_DIR=/abs/vault pnpm test:golden   # golden fixtures from the vault (gates 6, 7)
+PROMETHEUS_VAULT_DIR=/abs/vault pnpm smoke:t2      # gate 9 end to end
+pnpm --filter @prometheus/wiki-curator import-golden  --file /abs/golden.json
+pnpm --filter @prometheus/wiki-curator verify-target  --target <program>:<season>
+pnpm --filter @prometheus/wiki-curator build-baseline --season 2027-FALL --batch <id> --all
+pnpm --filter @prometheus/core start                 # POST /api/v1/dev/match on 127.0.0.1:8787
+```
+
+T2 environment (defaults applied by `scripts/env.mjs`): `AI_MODE` (`replay` | `live`; live keys come from
+`.secrets/openai_api_key` / `gemini_api_key`), `AI_CASSETTE_DIR` (`<repo>/cassettes`), `VALKEY_URL`,
+`CORE_HTTP_PORT` (8787), `MATCHING_EMBEDDINGS` (`off`). `pnpm db:migrate` also provisions the DBOS system schema
+`dbos` with the migrator role (runtime roles never run DDL).
 
 ## Layout
 

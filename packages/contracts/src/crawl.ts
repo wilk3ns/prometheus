@@ -8,6 +8,11 @@ export const SnapshotErrorCode = z.enum([
   'WAF_CHALLENGE_DETECTED',
   'BLOCKED_PRIVATE_ADDRESS',
   'HTTP_ERROR_STATUS',
+  /** http_status = 0: transient failures persisted so the 404 Healer can tell them apart (ENG-T2 §0 Q2). */
+  'FETCH_TIMEOUT',
+  'NETWORK_ERROR',
+  /** http_status = 0: robots.txt disallows the URL for `*`; never fetched (ENG-T2 §0 Q3). */
+  'ROBOTS_DISALLOWED',
 ]);
 export type SnapshotErrorCode = z.infer<typeof SnapshotErrorCode>;
 
@@ -51,6 +56,8 @@ export const UrlCrawlOutcome = z.discriminatedUnion('status', [
     rawBlobCreated: z.boolean(),
     textBlobCreated: z.boolean(),
     discoveredLinkCount: z.int().min(0),
+    /** Tier 2 sockets that escaped layers 1-2 and hit the fail-closed proxy during this capture (ENG-T2 Q5). */
+    blockedProxyRequestsCount: z.int().min(0),
   }),
   z.strictObject({
     status: z.literal('SNAPSHOT_ERROR_RECORDED'),
@@ -75,6 +82,8 @@ export const CrawlReport = z.strictObject({
   startedAt: z.iso.datetime(),
   finishedAt: z.iso.datetime(),
   fetchedCount: z.int().min(0),
+  /** Sum over the crawl of fail-closed proxy hits (should be 0; > 0 means a page tried to escape). */
+  blockedProxyRequestsCount: z.int().min(0),
   outcomes: z.array(UrlCrawlOutcome),
 });
 export type CrawlReport = z.infer<typeof CrawlReport>;

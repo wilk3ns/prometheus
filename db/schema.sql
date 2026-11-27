@@ -20,6 +20,20 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
+-- Name: econ; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA econ;
+
+
+--
+-- Name: matching; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA matching;
+
+
+--
 -- Name: wiki; Type: SCHEMA; Schema: -; Owner: -
 --
 
@@ -82,9 +96,106 @@ CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 COMMENT ON EXTENSION vector IS 'vector data type and ivfflat and hnsw access methods';
 
 
+--
+-- Name: assert_deep_verified_citations(); Type: FUNCTION; Schema: wiki; Owner: -
+--
+
+CREATE FUNCTION wiki.assert_deep_verified_citations() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  c jsonb;
+BEGIN
+  IF NEW.verification_depth = 'DEEP_VERIFIED' THEN
+    IF jsonb_typeof(NEW.citations_json) <> 'array' OR jsonb_array_length(NEW.citations_json) = 0 THEN
+      RAISE EXCEPTION 'DEEP_VERIFIED_REQUIRES_CITATIONS' USING ERRCODE = '23514';
+    END IF;
+    FOR c IN SELECT * FROM jsonb_array_elements(NEW.citations_json) LOOP
+      IF coalesce(trim(c->>'source_url'), '') = ''
+         OR coalesce(trim(c->>'verbatim_quote'), '') = ''
+         OR coalesce(trim(c->>'retrieved_at'), '') = '' THEN
+        RAISE EXCEPTION 'CITATION_MISSING_FIELDS' USING ERRCODE = '23514';
+      END IF;
+    END LOOP;
+  END IF;
+  RETURN NEW;
+END $$;
+
+
+--
+-- Name: forbid_revision_mutation(); Type: FUNCTION; Schema: wiki; Owner: -
+--
+
+CREATE FUNCTION wiki.forbid_revision_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  RAISE EXCEPTION 'NODE_REVISION_APPEND_ONLY' USING ERRCODE = '42501';
+END $$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
+
+--
+-- Name: ai_usage_ledger; Type: TABLE; Schema: econ; Owner: -
+--
+
+CREATE TABLE econ.ai_usage_ledger (
+    id uuid NOT NULL,
+    idempotency_key text NOT NULL,
+    call_key text,
+    subsystem text NOT NULL,
+    route text NOT NULL,
+    provider text NOT NULL,
+    family text NOT NULL,
+    model_or_sku text NOT NULL,
+    prompt_id text NOT NULL,
+    prompt_version text NOT NULL,
+    prompt_hash character(64) NOT NULL,
+    input_tokens integer DEFAULT 0 NOT NULL,
+    output_tokens integer DEFAULT 0 NOT NULL,
+    estimated_cost_usd numeric(10,6) DEFAULT 0 NOT NULL,
+    latency_ms integer DEFAULT 0 NOT NULL,
+    outcome text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ai_usage_ledger_family_check CHECK ((family = ANY (ARRAY['openai-gpt'::text, 'google-gemini'::text, 'replay'::text]))),
+    CONSTRAINT ai_usage_ledger_outcome_check CHECK ((outcome = ANY (ARRAY['OK'::text, 'SCHEMA_INVALID'::text, 'ABSTAIN'::text, 'BUDGET'::text, 'DEADLINE'::text, 'POLICY_DENIED'::text, 'ERROR'::text]))),
+    CONSTRAINT ai_usage_ledger_subsystem_check CHECK ((subsystem = ANY (ARRAY['WIKI_BASELINE'::text, 'WIKI_DEEP_VERIFY'::text, 'MATCHING'::text, 'VOICE'::text, 'DOC_VLM'::text, 'COUNSELOR'::text])))
+);
+
+
+--
+-- Name: call_budget; Type: TABLE; Schema: econ; Owner: -
+--
+
+CREATE TABLE econ.call_budget (
+    call_key text NOT NULL,
+    route text NOT NULL,
+    cap_usd numeric(10,6) NOT NULL,
+    reserved_usd numeric(10,6) DEFAULT 0 NOT NULL,
+    attempts_count smallint DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT call_budget_cap_usd_check CHECK ((cap_usd > (0)::numeric)),
+    CONSTRAINT call_budget_check CHECK (((reserved_usd >= (0)::numeric) AND (reserved_usd <= cap_usd)))
+);
+
+
+--
+-- Name: rate_card; Type: TABLE; Schema: econ; Owner: -
+--
+
+CREATE TABLE econ.rate_card (
+    provider text NOT NULL,
+    model_or_sku text NOT NULL,
+    unit text NOT NULL,
+    usd_per_unit numeric(12,6) NOT NULL,
+    valid_from date DEFAULT '2026-01-01'::date NOT NULL,
+    CONSTRAINT rate_card_unit_check CHECK ((unit = ANY (ARRAY['INPUT_1M_TOKENS'::text, 'OUTPUT_1M_TOKENS'::text, 'EMBED_1M_TOKENS'::text, 'VOICE_MINUTE'::text]))),
+    CONSTRAINT rate_card_usd_per_unit_check CHECK ((usd_per_unit >= (0)::numeric))
+);
+
 
 --
 -- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
@@ -92,6 +203,33 @@ SET default_table_access_method = heap;
 
 CREATE TABLE public.schema_migrations (
     version character varying NOT NULL
+);
+
+
+--
+-- Name: city_profile; Type: TABLE; Schema: wiki; Owner: -
+--
+
+CREATE TABLE wiki.city_profile (
+    id text NOT NULL,
+    country_iso2 character(2) NOT NULL,
+    city_name_en text NOT NULL,
+    monthly_living_min_eur integer,
+    monthly_living_max_eur integer,
+    minor_consents_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    attributes_json jsonb NOT NULL,
+    citations_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    slot_completeness_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    agent_slice_card_json jsonb,
+    verification_depth text NOT NULL,
+    verification_score numeric(4,3),
+    locked_fields_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    version integer DEFAULT 1 NOT NULL,
+    verified_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT city_profile_check CHECK (((verification_depth <> 'DEEP_VERIFIED'::text) OR (verification_score >= 0.950))),
+    CONSTRAINT city_profile_country_iso2_check CHECK ((country_iso2 = ANY (ARRAY['IT'::bpchar, 'DE'::bpchar, 'PL'::bpchar, 'HU'::bpchar, 'TR'::bpchar]))),
+    CONSTRAINT city_profile_verification_depth_check CHECK ((verification_depth = ANY (ARRAY['BASELINE'::text, 'DEEP_VERIFIED'::text, 'QUARANTINED'::text]))),
+    CONSTRAINT city_profile_verification_score_check CHECK (((verification_score >= (0)::numeric) AND (verification_score <= (1)::numeric)))
 );
 
 
@@ -119,6 +257,48 @@ CREATE TABLE wiki.crawl_target (
 
 
 --
+-- Name: destination_country_rule; Type: TABLE; Schema: wiki; Owner: -
+--
+
+CREATE TABLE wiki.destination_country_rule (
+    id uuid NOT NULL,
+    country_iso2 character(2) NOT NULL,
+    admission_season character varying(32) NOT NULL,
+    verification_depth text NOT NULL,
+    verification_score numeric(4,3),
+    rules_payload_json jsonb NOT NULL,
+    citations_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    slot_completeness_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    locked_fields_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    version integer DEFAULT 1 NOT NULL,
+    verified_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT destination_country_rule_check CHECK (((verification_depth <> 'DEEP_VERIFIED'::text) OR (verification_score >= 0.950))),
+    CONSTRAINT destination_country_rule_country_iso2_check CHECK ((country_iso2 = ANY (ARRAY['IT'::bpchar, 'DE'::bpchar, 'PL'::bpchar, 'HU'::bpchar, 'TR'::bpchar]))),
+    CONSTRAINT destination_country_rule_verification_depth_check CHECK ((verification_depth = ANY (ARRAY['BASELINE'::text, 'DEEP_VERIFIED'::text, 'QUARANTINED'::text]))),
+    CONSTRAINT destination_country_rule_verification_score_check CHECK (((verification_score >= (0)::numeric) AND (verification_score <= (1)::numeric)))
+);
+
+
+--
+-- Name: node_revision; Type: TABLE; Schema: wiki; Owner: -
+--
+
+CREATE TABLE wiki.node_revision (
+    id uuid NOT NULL,
+    layer text NOT NULL,
+    node_key text NOT NULL,
+    version integer NOT NULL,
+    actor text NOT NULL,
+    before_json jsonb,
+    after_json jsonb NOT NULL,
+    reason text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT node_revision_actor_check CHECK ((actor = ANY (ARRAY['AI_CURATOR'::text, 'GOLDEN_FIXTURE'::text, 'HUMAN'::text]))),
+    CONSTRAINT node_revision_layer_check CHECK ((layer = ANY (ARRAY['COUNTRY'::text, 'CITY'::text, 'ORIGIN_EQUIVALENCY'::text, 'UNIVERSITY'::text, 'HOUSING'::text, 'PROGRAM_SPEC'::text])))
+);
+
+
+--
 -- Name: official_domain_allowlist; Type: TABLE; Schema: wiki; Owner: -
 --
 
@@ -134,6 +314,121 @@ CREATE TABLE wiki.official_domain_allowlist (
     CONSTRAINT official_domain_allowlist_default_fetch_mode_check CHECK ((default_fetch_mode = ANY (ARRAY['HTTP_FIRST'::text, 'JS_CATALOG'::text]))),
     CONSTRAINT official_domain_allowlist_host_check CHECK (((host = lower(host)) AND (host !~~ 'http%'::text))),
     CONSTRAINT official_domain_allowlist_org_kind_check CHECK ((org_kind = ANY (ARRAY['UNIVERSITY'::text, 'MINISTRY_PORTAL'::text, 'RECOGNITION_BODY'::text, 'CITY_TRANSIT'::text, 'SCHOLARSHIP_BODY'::text, 'HOUSING'::text])))
+);
+
+
+--
+-- Name: origin_equivalency_rule; Type: TABLE; Schema: wiki; Owner: -
+--
+
+CREATE TABLE wiki.origin_equivalency_rule (
+    id uuid NOT NULL,
+    destination_country_iso2 character(2) NOT NULL,
+    citizenship_country character(2) NOT NULL,
+    diploma_origin_country character(2) NOT NULL,
+    diploma_type character varying(64) NOT NULL,
+    admission_season character varying(32) NOT NULL,
+    equivalency_policy text NOT NULL,
+    national_recognition_lead_days smallint DEFAULT 0 NOT NULL,
+    ru_sector_translation_exempt boolean DEFAULT false NOT NULL,
+    paper_apostille_accepted boolean DEFAULT true NOT NULL,
+    e_apostille_accepted boolean DEFAULT true NOT NULL,
+    minor_consents_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    legalization_rules_json jsonb NOT NULL,
+    citations_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    slot_completeness_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    verification_depth text NOT NULL,
+    verification_score numeric(4,3),
+    locked_fields_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    version integer DEFAULT 1 NOT NULL,
+    verified_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT origin_equivalency_rule_check CHECK (((verification_depth <> 'DEEP_VERIFIED'::text) OR (verification_score >= 0.950))),
+    CONSTRAINT origin_equivalency_rule_destination_country_iso2_check CHECK ((destination_country_iso2 = ANY (ARRAY['IT'::bpchar, 'DE'::bpchar, 'PL'::bpchar, 'HU'::bpchar, 'TR'::bpchar]))),
+    CONSTRAINT origin_equivalency_rule_equivalency_policy_check CHECK ((equivalency_policy = ANY (ARRAY['DIRECT'::text, 'DIRECT_WITH_NATIONAL_STATEMENT'::text, 'FOUNDATION_REQUIRED'::text, 'ONE_YEAR_UNI_REQUIRED'::text, 'NOT_ELIGIBLE'::text]))),
+    CONSTRAINT origin_equivalency_rule_national_recognition_lead_days_check CHECK ((national_recognition_lead_days >= 0)),
+    CONSTRAINT origin_equivalency_rule_verification_depth_check CHECK ((verification_depth = ANY (ARRAY['BASELINE'::text, 'DEEP_VERIFIED'::text, 'QUARANTINED'::text]))),
+    CONSTRAINT origin_equivalency_rule_verification_score_check CHECK (((verification_score >= (0)::numeric) AND (verification_score <= (1)::numeric)))
+);
+
+
+--
+-- Name: program; Type: TABLE; Schema: wiki; Owner: -
+--
+
+CREATE TABLE wiki.program (
+    id text NOT NULL,
+    university_id text NOT NULL,
+    name_en text NOT NULL,
+    name_local text,
+    degree_level text NOT NULL,
+    field_code character varying(64) NOT NULL,
+    instruction_language character(2) NOT NULL,
+    duration_semesters smallint NOT NULL,
+    ects_total smallint,
+    official_program_url text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT program_degree_level_check CHECK ((degree_level = ANY (ARRAY['BACHELOR'::text, 'MASTER'::text]))),
+    CONSTRAINT program_duration_semesters_check CHECK (((duration_semesters >= 1) AND (duration_semesters <= 12)))
+);
+
+
+--
+-- Name: program_embedding; Type: TABLE; Schema: wiki; Owner: -
+--
+
+CREATE TABLE wiki.program_embedding (
+    program_id text NOT NULL,
+    model_id text NOT NULL,
+    embedding public.vector(1536),
+    search_text text NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: program_season_spec; Type: TABLE; Schema: wiki; Owner: -
+--
+
+CREATE TABLE wiki.program_season_spec (
+    id uuid NOT NULL,
+    program_id text NOT NULL,
+    admission_season character varying(32) NOT NULL,
+    wiki_status text DEFAULT 'DRAFT'::text NOT NULL,
+    verification_depth text NOT NULL,
+    verification_score numeric(4,3),
+    tuition_annual_eur integer NOT NULL,
+    scholarship_waiver_codes_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    accepted_prior_fields_json jsonb NOT NULL,
+    predicted_grades_accepted boolean NOT NULL,
+    min_gpa_100 numeric(5,2),
+    min_math_100 numeric(5,2),
+    high_school_emi_accepted boolean DEFAULT false NOT NULL,
+    min_bsc_emi_pct smallint,
+    min_english_requirements_json jsonb NOT NULL,
+    required_entrance_exams_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    schooling_11yr_override text,
+    app_window_open_at timestamp with time zone,
+    app_window_close_at timestamp with time zone NOT NULL,
+    qualified_docs_deadline_at timestamp with time zone,
+    classes_start_date date,
+    official_portal_fee_eur_cents bigint,
+    program_requirements_json jsonb NOT NULL,
+    citations_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    slot_completeness_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    agent_slice_card_json jsonb,
+    locked_fields_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    version integer DEFAULT 1 NOT NULL,
+    verified_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT program_season_spec_check CHECK (((verification_depth <> 'DEEP_VERIFIED'::text) OR (verification_score >= 0.950))),
+    CONSTRAINT program_season_spec_min_bsc_emi_pct_check CHECK (((min_bsc_emi_pct >= 1) AND (min_bsc_emi_pct <= 100))),
+    CONSTRAINT program_season_spec_min_gpa_100_check CHECK (((min_gpa_100 >= (0)::numeric) AND (min_gpa_100 <= (100)::numeric))),
+    CONSTRAINT program_season_spec_min_math_100_check CHECK (((min_math_100 >= (0)::numeric) AND (min_math_100 <= (100)::numeric))),
+    CONSTRAINT program_season_spec_official_portal_fee_eur_cents_check CHECK ((official_portal_fee_eur_cents >= 0)),
+    CONSTRAINT program_season_spec_schooling_11yr_override_check CHECK ((schooling_11yr_override = ANY (ARRAY['DIRECT'::text, 'DIRECT_WITH_NATIONAL_STATEMENT'::text, 'FOUNDATION_REQUIRED'::text, 'ONE_YEAR_UNI_REQUIRED'::text, 'NOT_ELIGIBLE'::text]))),
+    CONSTRAINT program_season_spec_tuition_annual_eur_check CHECK ((tuition_annual_eur >= 0)),
+    CONSTRAINT program_season_spec_verification_depth_check CHECK ((verification_depth = ANY (ARRAY['BASELINE'::text, 'DEEP_VERIFIED'::text, 'QUARANTINED'::text]))),
+    CONSTRAINT program_season_spec_verification_score_check CHECK (((verification_score >= (0)::numeric) AND (verification_score <= (1)::numeric))),
+    CONSTRAINT program_season_spec_wiki_status_check CHECK ((wiki_status = ANY (ARRAY['DRAFT'::text, 'ACTIVE'::text, 'CLOSED'::text, 'ARCHIVED'::text])))
 );
 
 
@@ -167,11 +462,121 @@ CREATE TABLE wiki.source_snapshot (
 
 
 --
+-- Name: university; Type: TABLE; Schema: wiki; Owner: -
+--
+
+CREATE TABLE wiki.university (
+    id text NOT NULL,
+    name_en text NOT NULL,
+    name_local text,
+    country_iso2 character(2) NOT NULL,
+    city_id text NOT NULL,
+    institution_type text NOT NULL,
+    official_domain text NOT NULL,
+    official_email_domains_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    primary_portal_type text NOT NULL,
+    portal_url text,
+    sends_email_notifications boolean DEFAULT true NOT NULL,
+    credit_card_accepted boolean DEFAULT true NOT NULL,
+    pricing_tier_code text NOT NULL,
+    minor_consents_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    general_rules_json jsonb NOT NULL,
+    citations_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    slot_completeness_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    agent_slice_card_json jsonb,
+    verification_depth text NOT NULL,
+    verification_score numeric(4,3),
+    locked_fields_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    version integer DEFAULT 1 NOT NULL,
+    verified_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT university_check CHECK (((verification_depth <> 'DEEP_VERIFIED'::text) OR (verification_score >= 0.950))),
+    CONSTRAINT university_country_iso2_check CHECK ((country_iso2 = ANY (ARRAY['IT'::bpchar, 'DE'::bpchar, 'PL'::bpchar, 'HU'::bpchar, 'TR'::bpchar]))),
+    CONSTRAINT university_institution_type_check CHECK ((institution_type = ANY (ARRAY['PUBLIC'::text, 'PRIVATE'::text]))),
+    CONSTRAINT university_pricing_tier_code_check CHECK ((pricing_tier_code = ANY (ARRAY['T1'::text, 'T2'::text, 'T3'::text]))),
+    CONSTRAINT university_primary_portal_type_check CHECK ((primary_portal_type = ANY (ARRAY['UNI_ASSIST'::text, 'UNIVERSITALY'::text, 'DREAMAPPLY'::text, 'STIPENDIUM_HUNGARICUM'::text, 'TURKISH_OBS'::text, 'IRK'::text, 'DIRECT'::text]))),
+    CONSTRAINT university_verification_depth_check CHECK ((verification_depth = ANY (ARRAY['BASELINE'::text, 'DEEP_VERIFIED'::text, 'QUARANTINED'::text]))),
+    CONSTRAINT university_verification_score_check CHECK (((verification_score >= (0)::numeric) AND (verification_score <= (1)::numeric)))
+);
+
+
+--
+-- Name: university_housing; Type: TABLE; Schema: wiki; Owner: -
+--
+
+CREATE TABLE wiki.university_housing (
+    id uuid NOT NULL,
+    university_id text NOT NULL,
+    rates_season character varying(32) NOT NULL,
+    portal_url text,
+    official_info_url text NOT NULL,
+    rate_pdf_url text,
+    total_places integer,
+    subsidized_places integer,
+    monthly_min_eur integer,
+    monthly_max_eur integer,
+    non_refundable_on_visa_denial boolean DEFAULT false NOT NULL,
+    critical_rules_json jsonb NOT NULL,
+    halls_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    citations_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    slot_completeness_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    agent_slice_card_json jsonb,
+    verification_depth text NOT NULL,
+    verification_score numeric(4,3),
+    locked_fields_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    version integer DEFAULT 1 NOT NULL,
+    verified_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT university_housing_check CHECK (((verification_depth <> 'DEEP_VERIFIED'::text) OR (verification_score >= 0.950))),
+    CONSTRAINT university_housing_verification_depth_check CHECK ((verification_depth = ANY (ARRAY['BASELINE'::text, 'DEEP_VERIFIED'::text, 'QUARANTINED'::text]))),
+    CONSTRAINT university_housing_verification_score_check CHECK (((verification_score >= (0)::numeric) AND (verification_score <= (1)::numeric)))
+);
+
+
+--
+-- Name: ai_usage_ledger ai_usage_ledger_idempotency_key_key; Type: CONSTRAINT; Schema: econ; Owner: -
+--
+
+ALTER TABLE ONLY econ.ai_usage_ledger
+    ADD CONSTRAINT ai_usage_ledger_idempotency_key_key UNIQUE (idempotency_key);
+
+
+--
+-- Name: ai_usage_ledger ai_usage_ledger_pkey; Type: CONSTRAINT; Schema: econ; Owner: -
+--
+
+ALTER TABLE ONLY econ.ai_usage_ledger
+    ADD CONSTRAINT ai_usage_ledger_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: call_budget call_budget_pkey; Type: CONSTRAINT; Schema: econ; Owner: -
+--
+
+ALTER TABLE ONLY econ.call_budget
+    ADD CONSTRAINT call_budget_pkey PRIMARY KEY (call_key);
+
+
+--
+-- Name: rate_card rate_card_pkey; Type: CONSTRAINT; Schema: econ; Owner: -
+--
+
+ALTER TABLE ONLY econ.rate_card
+    ADD CONSTRAINT rate_card_pkey PRIMARY KEY (provider, model_or_sku, unit, valid_from);
+
+
+--
 -- Name: schema_migrations schema_migrations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.schema_migrations
     ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (version);
+
+
+--
+-- Name: city_profile city_profile_pkey; Type: CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.city_profile
+    ADD CONSTRAINT city_profile_pkey PRIMARY KEY (id);
 
 
 --
@@ -191,6 +596,30 @@ ALTER TABLE ONLY wiki.crawl_target
 
 
 --
+-- Name: destination_country_rule destination_country_rule_country_iso2_admission_season_key; Type: CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.destination_country_rule
+    ADD CONSTRAINT destination_country_rule_country_iso2_admission_season_key UNIQUE (country_iso2, admission_season);
+
+
+--
+-- Name: destination_country_rule destination_country_rule_pkey; Type: CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.destination_country_rule
+    ADD CONSTRAINT destination_country_rule_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: node_revision node_revision_pkey; Type: CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.node_revision
+    ADD CONSTRAINT node_revision_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: official_domain_allowlist official_domain_allowlist_pkey; Type: CONSTRAINT; Schema: wiki; Owner: -
 --
 
@@ -199,11 +628,90 @@ ALTER TABLE ONLY wiki.official_domain_allowlist
 
 
 --
+-- Name: origin_equivalency_rule origin_equivalency_rule_destination_country_iso2_citizenshi_key; Type: CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.origin_equivalency_rule
+    ADD CONSTRAINT origin_equivalency_rule_destination_country_iso2_citizenshi_key UNIQUE (destination_country_iso2, citizenship_country, diploma_origin_country, diploma_type, admission_season);
+
+
+--
+-- Name: origin_equivalency_rule origin_equivalency_rule_pkey; Type: CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.origin_equivalency_rule
+    ADD CONSTRAINT origin_equivalency_rule_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: program_embedding program_embedding_pkey; Type: CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.program_embedding
+    ADD CONSTRAINT program_embedding_pkey PRIMARY KEY (program_id);
+
+
+--
+-- Name: program program_pkey; Type: CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.program
+    ADD CONSTRAINT program_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: program_season_spec program_season_spec_pkey; Type: CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.program_season_spec
+    ADD CONSTRAINT program_season_spec_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: program_season_spec program_season_spec_program_id_admission_season_key; Type: CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.program_season_spec
+    ADD CONSTRAINT program_season_spec_program_id_admission_season_key UNIQUE (program_id, admission_season);
+
+
+--
 -- Name: source_snapshot source_snapshot_pkey; Type: CONSTRAINT; Schema: wiki; Owner: -
 --
 
 ALTER TABLE ONLY wiki.source_snapshot
     ADD CONSTRAINT source_snapshot_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: university_housing university_housing_pkey; Type: CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.university_housing
+    ADD CONSTRAINT university_housing_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: university_housing university_housing_university_id_rates_season_key; Type: CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.university_housing
+    ADD CONSTRAINT university_housing_university_id_rates_season_key UNIQUE (university_id, rates_season);
+
+
+--
+-- Name: university university_pkey; Type: CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.university
+    ADD CONSTRAINT university_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: idx_program_embedding_trgm; Type: INDEX; Schema: wiki; Owner: -
+--
+
+CREATE INDEX idx_program_embedding_trgm ON wiki.program_embedding USING gin (search_text public.gin_trgm_ops);
 
 
 --
@@ -228,11 +736,122 @@ CREATE INDEX idx_source_snapshot_target ON wiki.source_snapshot USING btree (tar
 
 
 --
+-- Name: city_profile trg_cit_city; Type: TRIGGER; Schema: wiki; Owner: -
+--
+
+CREATE TRIGGER trg_cit_city BEFORE INSERT OR UPDATE ON wiki.city_profile FOR EACH ROW EXECUTE FUNCTION wiki.assert_deep_verified_citations();
+
+
+--
+-- Name: destination_country_rule trg_cit_country; Type: TRIGGER; Schema: wiki; Owner: -
+--
+
+CREATE TRIGGER trg_cit_country BEFORE INSERT OR UPDATE ON wiki.destination_country_rule FOR EACH ROW EXECUTE FUNCTION wiki.assert_deep_verified_citations();
+
+
+--
+-- Name: university_housing trg_cit_housing; Type: TRIGGER; Schema: wiki; Owner: -
+--
+
+CREATE TRIGGER trg_cit_housing BEFORE INSERT OR UPDATE ON wiki.university_housing FOR EACH ROW EXECUTE FUNCTION wiki.assert_deep_verified_citations();
+
+
+--
+-- Name: origin_equivalency_rule trg_cit_origin; Type: TRIGGER; Schema: wiki; Owner: -
+--
+
+CREATE TRIGGER trg_cit_origin BEFORE INSERT OR UPDATE ON wiki.origin_equivalency_rule FOR EACH ROW EXECUTE FUNCTION wiki.assert_deep_verified_citations();
+
+
+--
+-- Name: program_season_spec trg_cit_spec; Type: TRIGGER; Schema: wiki; Owner: -
+--
+
+CREATE TRIGGER trg_cit_spec BEFORE INSERT OR UPDATE ON wiki.program_season_spec FOR EACH ROW EXECUTE FUNCTION wiki.assert_deep_verified_citations();
+
+
+--
+-- Name: university trg_cit_uni; Type: TRIGGER; Schema: wiki; Owner: -
+--
+
+CREATE TRIGGER trg_cit_uni BEFORE INSERT OR UPDATE ON wiki.university FOR EACH ROW EXECUTE FUNCTION wiki.assert_deep_verified_citations();
+
+
+--
+-- Name: node_revision trg_node_revision_immutable; Type: TRIGGER; Schema: wiki; Owner: -
+--
+
+CREATE TRIGGER trg_node_revision_immutable BEFORE DELETE OR UPDATE ON wiki.node_revision FOR EACH ROW EXECUTE FUNCTION wiki.forbid_revision_mutation();
+
+
+--
+-- Name: node_revision trg_node_revision_no_trunc; Type: TRIGGER; Schema: wiki; Owner: -
+--
+
+CREATE TRIGGER trg_node_revision_no_trunc BEFORE TRUNCATE ON wiki.node_revision FOR EACH STATEMENT EXECUTE FUNCTION wiki.forbid_revision_mutation();
+
+
+--
+-- Name: program_embedding program_embedding_program_id_fkey; Type: FK CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.program_embedding
+    ADD CONSTRAINT program_embedding_program_id_fkey FOREIGN KEY (program_id) REFERENCES wiki.program(id) ON DELETE CASCADE;
+
+
+--
+-- Name: program_season_spec program_season_spec_program_id_fkey; Type: FK CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.program_season_spec
+    ADD CONSTRAINT program_season_spec_program_id_fkey FOREIGN KEY (program_id) REFERENCES wiki.program(id);
+
+
+--
+-- Name: program program_university_id_fkey; Type: FK CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.program
+    ADD CONSTRAINT program_university_id_fkey FOREIGN KEY (university_id) REFERENCES wiki.university(id);
+
+
+--
 -- Name: source_snapshot source_snapshot_target_id_fkey; Type: FK CONSTRAINT; Schema: wiki; Owner: -
 --
 
 ALTER TABLE ONLY wiki.source_snapshot
     ADD CONSTRAINT source_snapshot_target_id_fkey FOREIGN KEY (target_id) REFERENCES wiki.crawl_target(id) ON DELETE SET NULL;
+
+
+--
+-- Name: university university_city_id_fkey; Type: FK CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.university
+    ADD CONSTRAINT university_city_id_fkey FOREIGN KEY (city_id) REFERENCES wiki.city_profile(id);
+
+
+--
+-- Name: university_housing university_housing_university_id_fkey; Type: FK CONSTRAINT; Schema: wiki; Owner: -
+--
+
+ALTER TABLE ONLY wiki.university_housing
+    ADD CONSTRAINT university_housing_university_id_fkey FOREIGN KEY (university_id) REFERENCES wiki.university(id);
+
+
+--
+-- Name: SCHEMA econ; Type: ACL; Schema: -; Owner: -
+--
+
+GRANT USAGE ON SCHEMA econ TO app_core;
+GRANT USAGE ON SCHEMA econ TO wiki_writer;
+
+
+--
+-- Name: SCHEMA matching; Type: ACL; Schema: -; Owner: -
+--
+
+GRANT USAGE ON SCHEMA matching TO app_core;
 
 
 --
@@ -244,11 +863,59 @@ GRANT USAGE ON SCHEMA wiki TO wiki_writer;
 
 
 --
+-- Name: TABLE ai_usage_ledger; Type: ACL; Schema: econ; Owner: -
+--
+
+GRANT SELECT,INSERT ON TABLE econ.ai_usage_ledger TO app_core;
+GRANT SELECT,INSERT ON TABLE econ.ai_usage_ledger TO wiki_writer;
+
+
+--
+-- Name: TABLE call_budget; Type: ACL; Schema: econ; Owner: -
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE econ.call_budget TO app_core;
+GRANT SELECT,INSERT,UPDATE ON TABLE econ.call_budget TO wiki_writer;
+
+
+--
+-- Name: TABLE rate_card; Type: ACL; Schema: econ; Owner: -
+--
+
+GRANT SELECT ON TABLE econ.rate_card TO app_core;
+GRANT SELECT,INSERT,UPDATE ON TABLE econ.rate_card TO wiki_writer;
+
+
+--
+-- Name: TABLE city_profile; Type: ACL; Schema: wiki; Owner: -
+--
+
+GRANT SELECT ON TABLE wiki.city_profile TO wiki_reader;
+GRANT SELECT,INSERT,UPDATE ON TABLE wiki.city_profile TO wiki_writer;
+
+
+--
 -- Name: TABLE crawl_target; Type: ACL; Schema: wiki; Owner: -
 --
 
 GRANT SELECT ON TABLE wiki.crawl_target TO wiki_reader;
 GRANT SELECT,INSERT,UPDATE ON TABLE wiki.crawl_target TO wiki_writer;
+
+
+--
+-- Name: TABLE destination_country_rule; Type: ACL; Schema: wiki; Owner: -
+--
+
+GRANT SELECT ON TABLE wiki.destination_country_rule TO wiki_reader;
+GRANT SELECT,INSERT,UPDATE ON TABLE wiki.destination_country_rule TO wiki_writer;
+
+
+--
+-- Name: TABLE node_revision; Type: ACL; Schema: wiki; Owner: -
+--
+
+GRANT SELECT ON TABLE wiki.node_revision TO wiki_reader;
+GRANT SELECT,INSERT ON TABLE wiki.node_revision TO wiki_writer;
 
 
 --
@@ -260,11 +927,59 @@ GRANT SELECT,INSERT,UPDATE ON TABLE wiki.official_domain_allowlist TO wiki_write
 
 
 --
+-- Name: TABLE origin_equivalency_rule; Type: ACL; Schema: wiki; Owner: -
+--
+
+GRANT SELECT ON TABLE wiki.origin_equivalency_rule TO wiki_reader;
+GRANT SELECT,INSERT,UPDATE ON TABLE wiki.origin_equivalency_rule TO wiki_writer;
+
+
+--
+-- Name: TABLE program; Type: ACL; Schema: wiki; Owner: -
+--
+
+GRANT SELECT ON TABLE wiki.program TO wiki_reader;
+GRANT SELECT,INSERT,UPDATE ON TABLE wiki.program TO wiki_writer;
+
+
+--
+-- Name: TABLE program_embedding; Type: ACL; Schema: wiki; Owner: -
+--
+
+GRANT SELECT ON TABLE wiki.program_embedding TO wiki_reader;
+GRANT SELECT,INSERT,UPDATE ON TABLE wiki.program_embedding TO wiki_writer;
+
+
+--
+-- Name: TABLE program_season_spec; Type: ACL; Schema: wiki; Owner: -
+--
+
+GRANT SELECT ON TABLE wiki.program_season_spec TO wiki_reader;
+GRANT SELECT,INSERT,UPDATE ON TABLE wiki.program_season_spec TO wiki_writer;
+
+
+--
 -- Name: TABLE source_snapshot; Type: ACL; Schema: wiki; Owner: -
 --
 
 GRANT SELECT ON TABLE wiki.source_snapshot TO wiki_reader;
 GRANT SELECT,INSERT,UPDATE ON TABLE wiki.source_snapshot TO wiki_writer;
+
+
+--
+-- Name: TABLE university; Type: ACL; Schema: wiki; Owner: -
+--
+
+GRANT SELECT ON TABLE wiki.university TO wiki_reader;
+GRANT SELECT,INSERT,UPDATE ON TABLE wiki.university TO wiki_writer;
+
+
+--
+-- Name: TABLE university_housing; Type: ACL; Schema: wiki; Owner: -
+--
+
+GRANT SELECT ON TABLE wiki.university_housing TO wiki_reader;
+GRANT SELECT,INSERT,UPDATE ON TABLE wiki.university_housing TO wiki_writer;
 
 
 --
@@ -283,3 +998,4 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA wiki GRANT SELECT,INSERT,UP
 
 -- dbmate schema_migrations
 -- 202611260001
+-- 202611270002

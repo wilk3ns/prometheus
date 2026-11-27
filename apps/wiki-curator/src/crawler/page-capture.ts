@@ -36,6 +36,8 @@ export type Capture =
       readonly lang: string | null;
       readonly pageCount: number | null;
       readonly links: readonly DiscoveredLink[];
+      /** Fail-closed proxy hits during this capture's Tier 2 render (0 for Tier 1 captures). */
+      readonly blockedProxyRequestsCount: number;
     }
   | {
       readonly kind: 'ERROR';
@@ -81,9 +83,44 @@ function errorCodeForStatus(status: number): SnapshotErrorCode {
   return status === 404 || status === 410 ? 'MISSING_SOURCE_404' : 'HTTP_ERROR_STATUS';
 }
 
+/**
+ * Tier 1 failures that are persisted as `http_status = 0` error rows (ENG-T2 §0 Q2): transient network
+ * failures stay distinguishable from a permanent `MISSING_SOURCE_404` without a second table.
+ */
+const PERSISTED_TIER1_FAILURES: Partial<Record<NotFetchedReason, SnapshotErrorCode>> = {
+  TIMEOUT: 'FETCH_TIMEOUT',
+  NETWORK_ERROR: 'NETWORK_ERROR',
+};
+
+/** `http_status` recorded for rows where no HTTP response exists (timeouts, network errors, robots). */
+export const NO_HTTP_STATUS = 0;
+
 export async function capturePage(url: URL, deps: CaptureDeps): Promise<Capture> {
   const t1 = await deps.http.fetch(url);
-  if (t1.kind === 'FAILED') return { kind: 'NOT_FETCHED', reason: t1.reason, detail: t1.detail };
+  if (t1.kind === 'ROBOTS_DISALLOWED') {
+    return {
+      kind: 'ERROR',
+      tier: 'TIER1_HTTP',
+      requestedUrl: t1.requestedUrl,
+      finalUrl: t1.requestedUrl,
+      httpStatus: NO_HTTP_STATUS,
+      errorCode: 'ROBOTS_DISALLOWED',
+    };
+  }
+  if (t1.kind === 'FAILED') {
+    const persisted = PERSISTED_TIER1_FAILURES[t1.reason];
+    if (persisted !== undefined) {
+      return {
+        kind: 'ERROR',
+        tier: 'TIER1_HTTP',
+        requestedUrl: t1.requestedUrl,
+        finalUrl: t1.requestedUrl,
+        httpStatus: NO_HTTP_STATUS,
+        errorCode: persisted,
+      };
+    }
+    return { kind: 'NOT_FETCHED', reason: t1.reason, detail: t1.detail };
+  }
   if (t1.kind === 'HOP_REFUSED') {
     return {
       kind: 'ERROR',
@@ -140,6 +177,7 @@ export async function capturePage(url: URL, deps: CaptureDeps): Promise<Capture>
       lang: null,
       pageCount: pdfText.pageCount,
       links: [],
+      blockedProxyRequestsCount: 0,
     };
   }
 
@@ -181,13 +219,25 @@ export async function capturePage(url: URL, deps: CaptureDeps): Promise<Capture>
       lang: t1Text.lang,
       pageCount: null,
       links: t1Text.links,
+      blockedProxyRequestsCount: 0,
     };
   }
 
   // Render exactly the URL Tier 1 reached; any further navigation is re-checked hop by hop by the renderer.
+  const proxyHitsBefore = deps.renderer.blockedProxyRequests();
   const t2 = await deps.renderer.render(new URL(t1.finalUrl));
+  const blockedProxyRequestsCount = deps.renderer.blockedProxyRequests() - proxyHitsBefore;
   if (t2.kind === 'FAILED') return { kind: 'NOT_FETCHED', reason: t2.reason, detail: `tier2: ${t2.detail}` };
   const t2Base = { tier: 'TIER2_PLAYWRIGHT' as const, requestedUrl: t1.requestedUrl };
+  if (t2.kind === 'ROBOTS_DISALLOWED') {
+    return {
+      kind: 'ERROR',
+      ...t2Base,
+      finalUrl: t1.finalUrl,
+      httpStatus: NO_HTTP_STATUS,
+      errorCode: 'ROBOTS_DISALLOWED',
+    };
+  }
   if (t2.kind === 'HOP_REFUSED') {
     return {
       kind: 'ERROR',
@@ -238,5 +288,6 @@ export async function capturePage(url: URL, deps: CaptureDeps): Promise<Capture>
     lang: t2Text.lang,
     pageCount: null,
     links: t2Text.links,
+    blockedProxyRequestsCount,
   };
 }

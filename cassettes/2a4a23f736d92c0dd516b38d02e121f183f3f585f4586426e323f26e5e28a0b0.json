@@ -1,0 +1,17 @@
+{
+  "key": "2a4a23f736d92c0dd516b38d02e121f183f3f585f4586426e323f26e5e28a0b0",
+  "material": {
+    "route": "RTE-wiki.deep_verify",
+    "promptHash": "205d8a3ee45c8b8e10373d3728b9320b560166584e1c3e293ef596a1d5d062a4",
+    "tier": "oa.flagship",
+    "excludeFamily": "google-gemini",
+    "inputHash": "48c1e3033b3aa9e14b0803de38b9bd2e86f4107e41961560bc1d27a2b8164337"
+  },
+  "note": "curator-verify good round 1: Agent B (deep_verify, oa.flagship, excludes google-gemini)",
+  "response": {
+    "kind": "GENERATE",
+    "text": "{\"verification_score\":0.97,\"checked_paths\":[\"tuition_annual_eur\",\"scholarship_waiver_codes_json\",\"accepted_prior_fields_json\",\"predicted_grades_accepted\",\"min_english_requirements_json\",\"required_entrance_exams_json\",\"app_window_close_at\",\"program.degree_level\",\"program.instruction_language\"],\"discrepancies\":[]}",
+    "inputTokens": 2900,
+    "outputTokens": 300
+  }
+}

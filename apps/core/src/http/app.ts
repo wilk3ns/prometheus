@@ -1,0 +1,62 @@
+import { Hono } from 'hono';
+import { z } from 'zod';
+import { AdmissionSeason, ApplicantMatchInput, Iso2 } from '@prometheus/contracts';
+import type { MatchService, ProgramListingPort } from '../modules/matching/index.js';
+
+/**
+ * Minimal HTTP surface of apps/core for T2 (ENG-T2 §1): health + read-only dev/test endpoints.
+ * Every body / query is Zod-validated at the boundary; errors are typed JSON, never stack traces.
+ *   GET  /healthz
+ *   GET  /api/v1/wiki/programs?season=2027-FALL[&country=PL]   matchable programs (read-only)
+ *   POST /api/v1/dev/match  { input: ApplicantMatchInput, asOf?: ISO datetime }   $0 deterministic match
+ */
+const MatchRequest = z.strictObject({
+  input: ApplicantMatchInput,
+  /** Fixed evaluation clock for tests / demos (ruling: Gate 7 profiles pin `asOf`). */
+  asOf: z.iso.datetime({ offset: true }).optional(),
+});
+
+const ProgramsQuery = z.strictObject({ season: AdmissionSeason, country: Iso2.optional() });
+
+export interface AppDeps {
+  readonly programs: ProgramListingPort;
+  readonly matching: MatchService;
+}
+
+const MAX_BODY_BYTES = 64 * 1024;
+
+export function buildApp(deps: AppDeps): Hono {
+  const app = new Hono();
+
+  app.get('/healthz', (c) => c.json({ status: 'ok' }));
+
+  app.get('/api/v1/wiki/programs', async (c) => {
+    const parsed = ProgramsQuery.safeParse(c.req.query());
+    if (!parsed.success) return c.json({ error: 'INVALID_QUERY', issues: parsed.error.issues }, 400);
+    return c.json({ programs: await deps.programs.listMatchable(parsed.data.season, parsed.data.country) });
+  });
+
+  app.post('/api/v1/dev/match', async (c) => {
+    const length = Number(c.req.header('content-length') ?? '0');
+    if (length > MAX_BODY_BYTES) return c.json({ error: 'BODY_TOO_LARGE' }, 413);
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'INVALID_JSON' }, 400);
+    }
+    const parsed = MatchRequest.safeParse(body);
+    if (!parsed.success) return c.json({ error: 'INVALID_INPUT', issues: parsed.error.issues }, 400);
+    const result = await deps.matching.match(
+      parsed.data.input,
+      parsed.data.asOf === undefined ? {} : { asOf: new Date(parsed.data.asOf) },
+    );
+    return c.json(result);
+  });
+
+  app.onError((error, c) => {
+    console.error(error instanceof Error ? `${error.name}: ${error.message}` : error);
+    return c.json({ error: 'INTERNAL' }, 500);
+  });
+  return app;
+}

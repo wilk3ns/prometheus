@@ -16,6 +16,12 @@ export interface DbConnectionOptions {
 
 export type Database = Kysely<DB>;
 
+/** OID of PostgreSQL `date`. */
+const PG_DATE_OID = 1082;
+// Calendar dates are returned verbatim ('YYYY-MM-DD'): the default parser builds a local-midnight Date,
+// which shifts the day in any non-UTC process. Matches `kysely-codegen --date-parser string`.
+pg.types.setTypeParser(PG_DATE_OID, (value: string) => value);
+
 export class DbRoleMismatchError extends Error {
   override readonly name = 'DbRoleMismatchError';
   constructor(

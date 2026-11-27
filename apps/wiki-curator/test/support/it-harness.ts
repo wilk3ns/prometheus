@@ -15,6 +15,7 @@ import { RequestGuard, type Resolver } from '../../src/crawler/request-guard.js'
 import { SnapshotStore } from '../../src/crawler/snapshot-store.js';
 import { UndiciHttpFetcher } from '../../src/crawler/tier1-http.js';
 import { PlaywrightJsRenderer, type Tier2Options } from '../../src/crawler/tier2-playwright.js';
+import { CrawlPoliteness, PoliteHttpFetcher, PoliteJsRenderer } from '../../src/crawler/politeness.js';
 import { fixtureAllowlistEntry } from './fixtures.js';
 import { testSandbox } from './sandbox.js';
 
@@ -28,6 +29,9 @@ export class CountingRenderer implements JsRendererPort {
   render(url: URL) {
     this.rendered.push(url.href);
     return this.inner.render(url);
+  }
+  blockedProxyRequests() {
+    return this.inner.blockedProxyRequests();
   }
   close() {
     return this.inner.close();
@@ -50,6 +54,11 @@ export interface HarnessOptions {
   readonly resolver?: Resolver;
   readonly http?: Omit<GuardedHttpOptions, 'userAgent'>;
   readonly tier2?: Tier2Options;
+  /**
+   * Apply ENG-T2 Q3 politeness (robots.txt + per-host token bucket) to EVERY host, the fixture host included
+   * (production exempts local fixture hosts; the politeness ITs need the fixture site to be treated as remote).
+   */
+  readonly politeness?: boolean;
 }
 
 export interface Harness {
@@ -84,9 +93,15 @@ export async function openHarness(opts: HarnessOptions = {}): Promise<Harness> {
     ...(opts.resolver ? [opts.resolver] : []),
   );
   const client = new GuardedHttpClient(guard, { userAgent: config.crawler.userAgent, ...opts.http });
-  const http = new CountingHttp(new UndiciHttpFetcher(client));
+  const guardedHttp = new UndiciHttpFetcher(client);
+  const playwright = new PlaywrightJsRenderer(client, config.crawler.userAgent, opts.tier2);
+  const politeness =
+    opts.politeness === true
+      ? new CrawlPoliteness({ robotsFetcher: guardedHttp, exemptHosts: new Set() })
+      : undefined;
+  const http = new CountingHttp(politeness ? new PoliteHttpFetcher(guardedHttp, politeness) : guardedHttp);
   const renderer = new CountingRenderer(
-    new PlaywrightJsRenderer(client, config.crawler.userAgent, opts.tier2),
+    politeness ? new PoliteJsRenderer(playwright, politeness) : playwright,
   );
   const sandbox = testSandbox();
   const runner = new CrawlRunner({

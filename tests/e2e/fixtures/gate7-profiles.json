@@ -1,0 +1,91 @@
+{
+  "schema": "gate7-profiles-v1",
+  "source": "ENG-T2 §6 Gate 7 + COMM-ARCH-T2-RULINGS B3 (exact priorFieldCode / dob / asOf)",
+  "profiles": [
+    {
+      "id": "P1",
+      "label": "ADA Baku CS senior (MASTER, 100% EMI, no IELTS, GPA 84, EUR 2,000, open to scholarships)",
+      "asOf": "2027-01-18T12:00:00Z",
+      "input": {
+        "dob": "2005-04-10",
+        "citizenshipCountry": "AZ",
+        "residenceCountry": "AZ",
+        "diplomaCountry": "AZ",
+        "diplomaType": "BACHELOR_DEGREE",
+        "yearsOfSchooling": 15,
+        "diplomaStatus": "IN_PROGRESS",
+        "expectedDiplomaMonth": "2027-06",
+        "priorInstructionLanguage": "en",
+        "priorEmiPct": 100,
+        "priorFieldCode": "CS_IT",
+        "gpaNormalized100": 84,
+        "targetDegree": "MASTER",
+        "targetSeason": "2027-FALL",
+        "targetFields": ["computer science"],
+        "preferredCountries": [],
+        "instructionLanguages": ["en"],
+        "annualBudgetEur": 2000,
+        "openToScholarships": true,
+        "householdIncomeUnder25kEur": "UNKNOWN",
+        "exams": []
+      }
+    },
+    {
+      "id": "P2",
+      "label": "17yo Baku RU-sector 11th grader (Attestat 2027-06, IELTS Academic 6.5, GPA 88, Math 95, EUR 5,000)",
+      "asOf": "2027-05-10T12:00:00Z",
+      "input": {
+        "dob": "2010-02-15",
+        "citizenshipCountry": "AZ",
+        "residenceCountry": "AZ",
+        "diplomaCountry": "AZ",
+        "diplomaType": "CIS_11YR_ATTESTAT",
+        "yearsOfSchooling": 11,
+        "diplomaStatus": "IN_PROGRESS",
+        "expectedDiplomaMonth": "2027-06",
+        "priorInstructionLanguage": "ru",
+        "priorEmiPct": 0,
+        "priorFieldCode": "STEM_QRUP_1",
+        "gpaNormalized100": 88,
+        "mathGrade100": 95,
+        "targetDegree": "BACHELOR",
+        "targetSeason": "2027-FALL",
+        "targetFields": ["computer science", "engineering"],
+        "preferredCountries": [],
+        "instructionLanguages": ["en"],
+        "annualBudgetEur": 5000,
+        "openToScholarships": false,
+        "householdIncomeUnder25kEur": "UNKNOWN",
+        "exams": [{ "type": "IELTS_ACADEMIC", "status": "OBTAINED", "score": 6.5 }]
+      }
+    },
+    {
+      "id": "P3",
+      "label": "17yo Baku AZ-sector 11th grader (Attestat 2027-06, high-school EMI letter only, no IELTS, EUR 12,000)",
+      "asOf": "2027-05-10T12:00:00Z",
+      "input": {
+        "dob": "2010-03-20",
+        "citizenshipCountry": "AZ",
+        "residenceCountry": "AZ",
+        "diplomaCountry": "AZ",
+        "diplomaType": "CIS_11YR_ATTESTAT",
+        "yearsOfSchooling": 11,
+        "diplomaStatus": "IN_PROGRESS",
+        "expectedDiplomaMonth": "2027-06",
+        "priorInstructionLanguage": "az",
+        "priorEmiPct": 100,
+        "priorFieldCode": "STEM_QRUP_1",
+        "gpaNormalized100": 85,
+        "targetDegree": "BACHELOR",
+        "targetSeason": "2027-FALL",
+        "targetFields": ["computer science"],
+        "preferredCountries": [],
+        "instructionLanguages": ["en"],
+        "annualBudgetEur": 12000,
+        "openToScholarships": false,
+        "householdIncomeUnder25kEur": "UNKNOWN",
+        "exams": []
+      }
+    }
+  ]
+}
