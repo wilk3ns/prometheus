@@ -17,7 +17,9 @@ import {
 import { boundIdentityFor, LAYERS } from '../src/curator/layers.js';
 import { pricingTierFor } from '../src/curator/golden-mapping.js';
 import { gatheredOf, goodFields, SCENARIOS, targetOf } from './support/curator-scenarios.js';
-import { buildExtractCall, buildVerifyCall } from '../src/curator/pipeline.js';
+import { buildExtractCall, buildVerifyCall, validateNodeProposal } from '../src/curator/pipeline.js';
+import { goldenProvenanceReport } from '../src/curator/golden-provenance.js';
+import { sanitizeUntrusted } from '@prometheus/ai';
 
 const SID = '0193f2a0-0000-7000-8000-0000000000aa';
 const URL_A = 'https://www.pw.edu.pl/fees';
@@ -611,5 +613,106 @@ describe('[T2-G4][MEDIUM-3] cross-agent text travels inside the nonce fence', ()
         (d) => d.kind === 'model',
       ),
     ).toBe(false);
+  });
+});
+
+describe('[T2-G5][cycle-2 MEDIUM-1] quote normaliser strips exactly what the sanitiser strips', () => {
+  const lrm = String.fromCharCode(0x200e);
+  const zwsp = String.fromCharCode(0x200b);
+  const page = `Deadline${lrm} 25 February 2027 for non-EU${zwsp} applicants.`;
+  const snap = new Map([
+    [SID, { id: SID, requestedUrl: URL_A, finalUrl: URL_A, cleanText: page, retrievedAt: SNAPSHOT_TIME }],
+  ]);
+  const withQuote = (verbatim_quote: string) =>
+    codes(
+      input({ snapshots: snap, proposal: { ...input().proposal, citations: [cite({ verbatim_quote })] } }),
+    );
+
+  it('a faithful quote of the model-visible text (LRM / ZWSP removed) passes', () => {
+    expect(sanitizeUntrusted(page)).toBe('Deadline 25 February 2027 for non-EU applicants.');
+    expect(withQuote('Deadline 25 February 2027 for non-EU applicants.')).toEqual([]);
+  });
+
+  it('a quote that still contains the invisible characters passes too (both sides use stripInvisible)', () => {
+    expect(withQuote(page)).toEqual([]);
+  });
+
+  it('a hallucinated quote still fails', () => {
+    expect(withQuote('Deadline 25 March 2027 for non-EU applicants.')).toEqual(['QUOTE_NOT_FOUND']);
+  });
+});
+
+describe('[T2-G5][cycle-2 LOW-2] a university city is bound to the target country', () => {
+  const sc = SCENARIOS.good;
+  const uniTarget = { ...targetOf(sc), layer: 'UNIVERSITY' as const, nodeKey: 'polimi', countryIso2: 'PL' };
+  const uniProposal = (cityId: string) => ({
+    layer: 'UNIVERSITY' as const,
+    node_key: 'polimi',
+    fields: {
+      id: 'polimi',
+      name_en: 'U',
+      name_local: null,
+      country_iso2: 'PL',
+      city_id: cityId,
+      institution_type: 'PUBLIC',
+      official_domain: 'pw.edu.pl',
+      official_email_domains_json: [],
+      primary_portal_type: 'DIRECT',
+      portal_url: null,
+      sends_email_notifications: true,
+      credit_card_accepted: true,
+      minor_consents_json: [],
+      general_rules_json: {},
+    },
+    slot_completeness: {},
+    abstain_fields: [],
+    citations: [],
+  });
+  const ctx = { existing: null, universityCountry: null };
+
+  it('a model-chosen city in another country is an IDENTITY_MISMATCH', () => {
+    const v = validateNodeProposal(uniTarget, uniProposal('IT-MILAN'), gatheredOf(sc), ctx, () => true);
+    expect(v.errors.some((e) => e.code === 'IDENTITY_MISMATCH' && e.path === 'city_id')).toBe(true);
+  });
+
+  it('a city in the target country passes the identity check', () => {
+    const v = validateNodeProposal(uniTarget, uniProposal('PL-WARSAW'), gatheredOf(sc), ctx, () => true);
+    expect(v.errors.some((e) => e.path === 'city_id')).toBe(false);
+  });
+});
+
+describe('[T2-G6][cycle-2 MEDIUM-2] golden provenance report', () => {
+  it('lists each uncited value with its exact basis, matcher-critical pending ratification first', () => {
+    const plan = {
+      file: 'x.json',
+      compiledKey: 'k',
+      season: '2027-FALL',
+      pending: [],
+      nodes: [
+        {
+          layer: 'ORIGIN_EQUIVALENCY' as const,
+          nodeKey: 'PL:AZ:AZ:CIS_11YR_ATTESTAT:2027-FALL',
+          fields: {},
+          depth: 'DEEP_VERIFIED' as const,
+          score: 0.98,
+          citations: [],
+          slots: {},
+          wikiStatus: null,
+          uncitedBasis: [
+            { path: 'paper_apostille_accepted', basis: 'FIXTURE_VALUE_UNCITED' as const, source: 's' },
+            { path: 'equivalency_policy', basis: 'RULING_D_A' as const, source: 's' },
+            { path: 'national_recognition_lead_days', basis: 'FIXTURE_VALUE_UNCITED' as const, source: 's' },
+          ],
+        },
+      ],
+    };
+    const r = goldenProvenanceReport([plan]);
+    expect(r.entries.map((e) => [e.path, e.matcherInput, e.pendingRatification])).toEqual([
+      ['national_recognition_lead_days', true, true],
+      ['equivalency_policy', true, false],
+      ['paper_apostille_accepted', false, true],
+    ]);
+    expect(r.matcherInputsPendingRatification).toBe(1);
+    expect(r.totals).toMatchObject({ FIXTURE_VALUE_UNCITED: 2, RULING_D_A: 1 });
   });
 });

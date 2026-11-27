@@ -115,24 +115,35 @@ async function main(): Promise<void> {
         ['city', 'PL-WARSAW'],
         ['dorms', 'wut'],
       ];
-      // LOW-7: p95 over 20 reads per card
+      // cycle-2 LOW-4: per card, one discarded warm-up read, then 15 timed reads; the gate is a TRUE p95 over
+      // the pooled 120 samples (plus each card's median for the log), not the maximum of a handful of reads
+      const READS_PER_CARD = 15;
+      const pooled: number[] = [];
       for (const [kind, id] of wanted) {
         const key = `wiki:card:${kind}:${id}:${SEASON}`;
-        const samples: number[] = [];
-        let raw: string | undefined;
-        for (let i = 0; i < 20; i += 1) {
-          const t = performance.now();
-          raw = await valkey.get(key);
-          samples.push(performance.now() - t);
-        }
+        const raw = await valkey.get(key); // warm-up, discarded from the timing
         if (raw === undefined) throw new StepFailed(`missing ${key}`);
         const card = SliceCard.parse(JSON.parse(raw));
-        samples.sort((a, b) => a - b);
-        const p95 = samples[Math.floor(samples.length * 0.95)] ?? Infinity;
-        if (card.est_tokens > 350 || p95 >= 5)
-          throw new StepFailed(`${key}: ${card.est_tokens} tokens, p95 ${p95.toFixed(2)} ms`);
-        log(`  ${key}: ${card.est_tokens} tokens, p95 ${p95.toFixed(2)} ms over 20 reads`);
+        if (card.est_tokens > 350) throw new StepFailed(`${key}: ${card.est_tokens} tokens`);
+        const samples: number[] = [];
+        for (let i = 0; i < READS_PER_CARD; i += 1) {
+          const t = performance.now();
+          if ((await valkey.get(key)) === undefined) throw new StepFailed(`missing ${key} on re-read`);
+          samples.push(performance.now() - t);
+        }
+        pooled.push(...samples);
+        samples.sort((x, y) => x - y);
+        log(
+          `  ${key}: ${card.est_tokens} tokens, median ${(samples[Math.floor(samples.length / 2)] ?? 0).toFixed(2)} ms`,
+        );
       }
+      pooled.sort((x, y) => x - y);
+      const p95 = pooled[Math.floor(pooled.length * 0.95)] ?? Infinity;
+      log(
+        `  pooled card reads: n=${pooled.length}, p95 ${p95.toFixed(2)} ms, max ${(pooled.at(-1) ?? 0).toFixed(2)} ms`,
+      );
+      if (pooled.length < 100 || p95 >= 5)
+        throw new StepFailed(`pooled p95 ${p95.toFixed(2)} ms over ${pooled.length} reads`);
     } finally {
       await valkey.close();
     }

@@ -289,6 +289,18 @@ export function validateNodeProposal(
       detail: `target-bound key ${target.nodeKey} is malformed`,
     });
   }
+  if (target.layer === 'UNIVERSITY') {
+    // LOW-2 (cycle 2): a university's city is never chosen freely by a model: it must be in the target's
+    // country (`XX-` city ids); commit() additionally requires the city row to exist and not be QUARANTINED
+    const cityId = getPath(outcome.effectiveFields, 'city_id');
+    if (typeof cityId !== 'string' || !cityId.startsWith(`${target.countryIso2}-`)) {
+      errors.push({
+        code: 'IDENTITY_MISMATCH',
+        path: 'city_id',
+        detail: `city ${String(cityId)} is not in target country ${target.countryIso2}`,
+      });
+    }
+  }
   if (target.layer === 'PROGRAM_SPEC' || target.layer === 'HOUSING') {
     if (context.universityCountry === null) {
       errors.push({
@@ -495,6 +507,21 @@ export class DualPassCurator {
       const existing = await store.findNode(target.layer, target.nodeKey);
       if (existing?.depth === 'QUARANTINED' && args.mode !== 'QUARANTINE') {
         return { status: 'KEPT_QUARANTINED', version: existing.version, materialized: empty };
+      }
+      if (args.mode !== 'QUARANTINE' && target.layer === 'UNIVERSITY') {
+        const cityId = validated?.fields?.['city_id'];
+        const city = typeof cityId === 'string' ? await store.findNode('CITY', cityId) : undefined;
+        if (city === undefined || city.depth === 'QUARANTINED') {
+          await store.recordRejectedProposal({
+            layer: target.layer,
+            nodeKey: target.nodeKey,
+            expectedVersion: args.expectedVersion,
+            actor: 'AI_CURATOR',
+            reason: `${args.reason}: city ${String(cityId)} missing or quarantined`,
+            evidence: { proposal, validator_errors: validated?.errors ?? [] },
+          });
+          return { status: 'REJECTED_IDENTITY', version: existing?.version ?? null, materialized: empty };
+        }
       }
       if (args.mode === 'BASELINE' && existing?.depth === 'DEEP_VERIFIED') {
         // a seasonal baseline never downgrades a deep-verified node

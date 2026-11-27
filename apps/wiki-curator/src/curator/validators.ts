@@ -1,3 +1,4 @@
+import { stripInvisible } from '@prometheus/kernel';
 import type { ProposalCitation } from '@prometheus/contracts';
 import { getPath, hasPath, pathsOverlap, sameValue, withPath } from './paths.js';
 
@@ -115,20 +116,15 @@ const QUOTES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Normalisation applied to BOTH the quote and the snapshot text: NFC, soft hyphens and zero-width characters
- * removed, typographic quotes/dashes folded to ASCII, every whitespace run (incl. NBSP) collapsed to one space.
+ * Normalisation applied to BOTH the quote and the snapshot text: kernel `stripInvisible` (all Unicode Cf +
+ * C0/C1 controls, exactly what the sanitiser removes from model-visible text), NFC, typographic quotes/dashes folded to ASCII, every whitespace run (incl. NBSP) collapsed to one space.
  * Case and punctuation otherwise stay intact: a paraphrase never matches.
  */
-/** Soft hyphen and zero-width characters (U+00AD, U+200B-U+200D, U+2060, U+FEFF), built from code points. */
-const INVISIBLE = new RegExp(
-  `[${[0xad, 0x200b, 0x200c, 0x200d, 0x2060, 0xfeff].map((c) => String.fromCharCode(c)).join('')}]`,
-  'g',
-);
 
 export function normalizeForQuote(text: string): string {
-  return text
+  // MEDIUM-1 (cycle 2): the same invisible set as the sanitiser, on BOTH the quote and the snapshot text
+  return stripInvisible(text)
     .normalize('NFC')
-    .replace(INVISIBLE, '')
     .replace(/[‘’‚‛′´`“”„‟″«»‐-―−]/g, (c) => QUOTES[c] ?? c)
     .replace(/\s+/g, ' ')
     .trim();

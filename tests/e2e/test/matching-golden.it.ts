@@ -40,7 +40,7 @@ describe('[T2-G6][T2-G7] golden import -> 8 Slice Cards -> $0 matching (Profiles
     await curator?.close();
   });
 
-  it('P1 golden provenance: every golden revision records evidence_basis ARCHITECT_RULING', async () => {
+  it('P1 golden provenance: every golden revision records evidence_basis GOLDEN_FIXTURE', async () => {
     const revs = await curator.db
       .selectFrom('wiki.node_revision')
       .select(['node_key', 'after_json'])
@@ -48,7 +48,7 @@ describe('[T2-G6][T2-G7] golden import -> 8 Slice Cards -> $0 matching (Profiles
       .execute();
     expect(revs.length).toBeGreaterThanOrEqual(18);
     for (const r of revs)
-      expect(r.after_json, r.node_key).toMatchObject({ evidence_basis: 'ARCHITECT_RULING' });
+      expect(r.after_json, r.node_key).toMatchObject({ evidence_basis: 'GOLDEN_FIXTURE' });
   });
 
   it('Gate 6: all 8 primary cards (docs, tuition_aid, city, dorms x 2) exist, <= 350 tokens, in PG and Valkey < 5 ms', async () => {

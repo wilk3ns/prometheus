@@ -50,11 +50,15 @@ export interface NodeWrite<L extends WikiLayer = WikiLayer> {
   readonly verifiedAt: Date;
   /**
    * Provenance of the evidence (P1, recorded in the revision): `VERIFIED_CITATIONS` for AI-curated nodes
-   * (every required path cited and validated), `ARCHITECT_RULING` for golden-fixture nodes.
+   * (every required path cited and validated), `GOLDEN_FIXTURE` for Architect-supplied golden records.
    */
-  readonly evidenceBasis: 'VERIFIED_CITATIONS' | 'ARCHITECT_RULING';
-  /** Golden only: required paths not carried by a citation, each with the ruling that covers it. */
-  readonly rulingCoveredPaths?: ReadonlyArray<{ readonly path: string; readonly ruling: string }>;
+  readonly evidenceBasis: 'VERIFIED_CITATIONS' | 'GOLDEN_FIXTURE';
+  /** Golden only: required paths not carried by a citation, each with the exact basis of its value. */
+  readonly uncitedBasis?: ReadonlyArray<{
+    readonly path: string;
+    readonly basis: string;
+    readonly source: string;
+  }>;
 }
 
 export interface QuarantineWrite {

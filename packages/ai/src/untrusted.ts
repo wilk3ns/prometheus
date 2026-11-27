@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { stripInvisible } from '@prometheus/kernel';
 
 /**
  * Untrusted-content wrapping (ENG-T2 §3.2). Crawled HTML text and `[PAGE N]` PDF text are data, never
@@ -29,27 +30,13 @@ export const cryptoNonce: NonceSource = () => randomBytes(16).toString('hex');
 
 const FENCE = /<(\/?)(untrusted)/gi;
 
-/** True for code units removed from untrusted text: C0 / DEL (except \n, \t) and C1 controls. */
-function isStripped(code: number): boolean {
-  if (code === 0x0a || code === 0x09) return false;
-  return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
-}
-
 /**
- * LOW-1: every Unicode format character (category Cf: BiDi overrides / isolates / marks incl. U+061C,
- * U+200E/F, zero-width U+200B-D, U+2060, U+FEFF, soft hyphen ...) is removed BEFORE the fence escape, so an
- * invisible character can never split `</untrusted` past the escape.
+ * LOW-1: invisible characters (kernel `stripInvisible`: every Unicode Cf + C0/C1 controls) are removed BEFORE
+ * the fence escape, so they can never split `</untrusted` past it. The verbatim-quote normaliser uses the SAME
+ * function, so a faithful quote of what the model saw always matches the snapshot.
  */
-const FORMAT_CHARS = /\p{Cf}/gu;
-
 export function sanitizeUntrusted(text: string): string {
-  const normalised = text.replace(/\r\n?/g, '\n').replace(FORMAT_CHARS, '');
-  let out = '';
-  for (let i = 0; i < normalised.length; i += 1) {
-    const code = normalised.charCodeAt(i);
-    if (!isStripped(code)) out += normalised[i];
-  }
-  return out.replace(FENCE, (_m, slash: string, word: string) => `&lt;${slash}${word}`);
+  return stripInvisible(text).replace(FENCE, (_m, slash: string, word: string) => `&lt;${slash}${word}`);
 }
 
 function attr(value: string): string {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { AdmissionSeason } from '@prometheus/contracts';
 import { loadAiConfig, loadCacheConfig, loadWikiCuratorConfig } from '@prometheus/config';
 import {
@@ -12,6 +12,7 @@ import {
   type CuratorRuntime,
 } from './bootstrap.js';
 import { importGolden, readGoldenPlan } from './curator/golden-importer.js';
+import { goldenProvenanceReport } from './curator/golden-provenance.js';
 import { layerForHint } from './curator/layers.js';
 import type { BaselineTargetSpec } from './curator/workflows.js';
 import { runCrawlBatch } from './ops/crawl-batch.js';
@@ -22,7 +23,8 @@ const USAGE = `usage:
   wiki-curator crawl          --target <target_key> | --all
   wiki-curator import-golden  --file <absolute path to a wiki-v2.0 golden JSON>
   wiki-curator verify-target  --target <target_key> [--node-key <key>] [--season <YYYY-FALL>]
-  wiki-curator build-baseline --season <YYYY-FALL> --batch <id> (--target <target_key> | --all)`;
+  wiki-curator build-baseline --season <YYYY-FALL> --batch <id> (--target <target_key> | --all)
+  wiki-curator golden-provenance-report [--fixture <abs golden JSON> ...]  (default: both vault golden fixtures)`;
 
 class UsageError extends Error {
   override readonly name = 'UsageError';
@@ -39,6 +41,7 @@ async function main(argv: readonly string[]): Promise<void> {
       season: { type: 'string' },
       batch: { type: 'string' },
       'node-key': { type: 'string' },
+      fixture: { type: 'string', multiple: true },
     },
     strict: true,
   });
@@ -85,6 +88,15 @@ async function main(argv: readonly string[]): Promise<void> {
       await session.close();
       await runtime.close();
     }
+    return;
+  }
+
+  if (command === 'golden-provenance-report') {
+    // pure: maps the fixtures and reports every uncited required value with its basis (no database)
+    const files = values.fixture ?? defaultGoldenFiles();
+    for (const f of files) if (!isAbsolute(f)) throw new UsageError(`--fixture must be absolute: ${f}`);
+    const plans = await Promise.all(files.map((f) => readGoldenPlan(f)));
+    console.log(JSON.stringify(goldenProvenanceReport(plans), null, 2));
     return;
   }
 
@@ -181,6 +193,16 @@ function bindNodeKey(layer: string, targetKey: string, opsKey: string | undefine
   }
   if (opsKey === undefined) throw new UsageError(`${layer} targets need an ops-supplied --node-key`);
   return opsKey;
+}
+
+function defaultGoldenFiles(): string[] {
+  const vault = process.env['PROMETHEUS_VAULT_DIR'];
+  if (vault === undefined || !isAbsolute(vault)) {
+    throw new UsageError('golden-provenance-report needs --fixture or an absolute PROMETHEUS_VAULT_DIR');
+  }
+  return ['golden-polimi-msc-cse-2027.json', 'golden-wut-bsc-cs-2027.json'].map((f) =>
+    join(vault, 'engineering', 'fixtures', f),
+  );
 }
 
 async function withWiki(

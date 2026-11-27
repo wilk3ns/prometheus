@@ -27,7 +27,14 @@ function withSyntheticRulings(n: GoldenNode): GoldenNode {
   const uncited = LAYERS[n.layer].requiredPaths.filter(
     (p) => !n.citations.some((c) => pathsOverlap(c.field_path, p)),
   );
-  return { ...n, rulingCovered: uncited.map((path) => ({ path, ruling: 'synthetic test fixture ruling' })) };
+  return {
+    ...n,
+    uncitedBasis: uncited.map((path) => ({
+      path,
+      basis: 'FIXTURE_VALUE_UNCITED' as const,
+      source: 'synthetic test fixture',
+    })),
+  };
 }
 
 function universityPlan(uni: string, cityId: string, host: string): GoldenNode[] {
@@ -40,7 +47,7 @@ function rawUniversityPlan(uni: string, cityId: string, host: string): GoldenNod
     score: 0.97,
     slots: {},
     wikiStatus: null,
-    rulingCovered: [],
+    uncitedBasis: [],
   };
   const huge = Object.fromEntries(
     Array.from({ length: 300 }, (_, i) => [`fact_${i}`, `value ${i} `.repeat(8)]),
@@ -249,22 +256,22 @@ describe('[T2-G6] Slice Cards: 8 cards <= 350 tokens in PG and Valkey (< 5 ms re
 
   it('P1 golden provenance: an uncited required path without a ruling entry fails the import loudly', async () => {
     const nodes = universityPlan('cardse', 'PL-CARDSE', 'pw.edu.pl').map((n) =>
-      n.layer === 'UNIVERSITY' ? { ...n, rulingCovered: n.rulingCovered.slice(1) } : n,
+      n.layer === 'UNIVERSITY' ? { ...n, uncitedBasis: n.uncitedBasis.slice(1) } : n,
     );
     await expect(importGolden({ ...services, clock: runtime.clock }, { ...plan, nodes })).rejects.toThrow(
-      /uncited required path\(s\) not covered by a ruling/,
+      /uncited required path\(s\) without a stated basis/,
     );
   });
 
-  it('golden revisions record evidence_basis ARCHITECT_RULING + the ruling-covered paths', async () => {
+  it('golden revisions record evidence_basis GOLDEN_FIXTURE + the uncited-value bases', async () => {
     const rev = await runtime.db
       .selectFrom('wiki.node_revision')
       .select('after_json')
       .where('node_key', '=', 'cardsa')
       .executeTakeFirstOrThrow();
     expect(rev.after_json).toMatchObject({
-      evidence_basis: 'ARCHITECT_RULING',
-      ruling_covered_paths: expect.any(Array),
+      evidence_basis: 'GOLDEN_FIXTURE',
+      uncited_basis: expect.any(Array),
     });
   });
 

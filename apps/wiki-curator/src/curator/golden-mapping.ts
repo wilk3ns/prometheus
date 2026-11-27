@@ -55,30 +55,43 @@ export interface GoldenNode {
   readonly slots: SlotCompleteness;
   readonly wikiStatus: WikiStatus | null;
   /**
-   * P1 (golden provenance): required paths NOT carried by a fixture citation, each with the Architect ruling
-   * that covers it. The importer fails on any uncited required path missing here (and on stale entries).
+   * P1 (golden provenance): required paths NOT carried by a fixture citation, each with the exact basis of its
+   * value. The importer fails on any uncited required path missing here (and on stale entries).
    */
-  readonly rulingCovered: readonly RuledPath[];
+  readonly uncitedBasis: readonly UncitedBasis[];
 }
 
-export interface RuledPath {
+export type UncitedBasisCode =
+  'FIXTURE_VALUE_UNCITED' | 'RULING_B3' | 'RULING_D_A' | 'RULING_D_F' | 'SPEC_G7' | 'PROVISIONAL_D_N';
+
+/** Why a required golden value carries no verbatim citation on its own node (MEDIUM-2, cycle 2: no overstatement). */
+export interface UncitedBasis {
   readonly path: string;
-  readonly ruling: string;
+  readonly basis: UncitedBasisCode;
+  readonly source: string;
 }
 
-/** Rulings that cover golden values without a verbatim citation on the node itself. */
-export const RULINGS = {
-  B3_PRIOR:
-    'COMM-ARCH-T2-RULINGS B3: accepted_prior_fields ruled and written into the fixture by the Architect',
-  B3_FIXTURE: 'COMM-ARCH-T2-RULINGS B1-B3: value written into the golden fixture by the Architect',
-  D_A: 'COMM-ARCH-T2-RULINGS D-a: NAWA statement policy = DIRECT_WITH_NATIONAL_STATEMENT',
-  D_F: 'COMM-ARCH-T2-RULINGS D-f: comparator inherits the university-wide B.Sc. rules (BASELINE + ACTIVE)',
-  D_N: 'D-n (accepted provisionally by the coordinator): PoliMi applies via its own Online Services',
-  GOLDEN: 'ENG-T2 §4 + B1: Architect-attested golden-record field (primary nodes import DEEP_VERIFIED)',
-} as const;
+/**
+ * Honest provenance for uncited required golden values. Only RULING_* codes are Architect rulings; the rest say
+ * exactly what backs the value, and FIXTURE_VALUE_UNCITED / PROVISIONAL_D_N await Architect ratification
+ * (`golden-provenance-report`).
+ */
+export const BASIS: Readonly<Record<UncitedBasisCode, string>> = {
+  FIXTURE_VALUE_UNCITED:
+    'Value present in the Architect-supplied golden fixture without a verbatim quote; imported per ENG-T2 §4 (golden import depth). Pending Architect ratification.',
+  RULING_B3:
+    'COMM-ARCH-T2-RULINGS B3: accepted_prior_fields lists ruled by the Architect and written into the fixture.',
+  RULING_D_A: 'COMM-ARCH-T2-RULINGS D-a: NAWA statement policy maps to DIRECT_WITH_NATIONAL_STATEMENT.',
+  RULING_D_F:
+    'COMM-ARCH-T2-RULINGS D-f: comparator inherits the university-wide B.Sc. rules (BASELINE + ACTIVE, NULL score).',
+  SPEC_G7:
+    'ENG-T2 §6 Gate 7 states the scholarship values (PoliMi DSU_LOMBARDIA; WUT B.Sc. no scholarships).',
+  PROVISIONAL_D_N:
+    'D-n: builder mapping choice accepted PROVISIONALLY by the coordinator; NOT an Architect ruling. Pending confirmation.',
+};
 
-function ruled(ruling: string, ...paths: string[]): RuledPath[] {
-  return paths.map((path) => ({ path, ruling }));
+function ruled(basis: UncitedBasisCode, ...paths: string[]): UncitedBasis[] {
+  return paths.map((path) => ({ path, basis, source: BASIS[basis] }));
 }
 
 export interface GoldenPlan {
@@ -202,7 +215,7 @@ function mapPolimi(f: FixtureNode, file: string): GoldenNode[] {
     score,
     citations: l1.citations(pathMapper('rules_payload_json')), // B1
     slots: slots('COUNTRY'),
-    rulingCovered: [],
+    uncitedBasis: [],
     wikiStatus: null,
   };
 
@@ -234,7 +247,7 @@ function mapPolimi(f: FixtureNode, file: string): GoldenNode[] {
     score,
     citations: l1b.citations(pathMapper('attributes_json')),
     slots: slots('CITY'),
-    rulingCovered: ruled(RULINGS.GOLDEN, 'city_name_en', 'minor_consents_json'),
+    uncitedBasis: ruled('FIXTURE_VALUE_UNCITED', 'city_name_en', 'minor_consents_json'),
     wikiStatus: null,
   };
 
@@ -272,8 +285,8 @@ function mapPolimi(f: FixtureNode, file: string): GoldenNode[] {
       }),
     ),
     slots: slots('ORIGIN_EQUIVALENCY'),
-    rulingCovered: ruled(
-      RULINGS.GOLDEN,
+    uncitedBasis: ruled(
+      'FIXTURE_VALUE_UNCITED',
       'equivalency_policy',
       'national_recognition_lead_days',
       'ru_sector_translation_exempt',
@@ -308,9 +321,9 @@ function mapPolimi(f: FixtureNode, file: string): GoldenNode[] {
     score,
     citations: l3.citations(pathMapper('general_rules_json')),
     slots: slots('UNIVERSITY'),
-    rulingCovered: [
-      ...ruled(RULINGS.GOLDEN, 'institution_type', 'credit_card_accepted', 'minor_consents_json'),
-      ...ruled(RULINGS.D_N, 'primary_portal_type'),
+    uncitedBasis: [
+      ...ruled('FIXTURE_VALUE_UNCITED', 'institution_type', 'credit_card_accepted', 'minor_consents_json'),
+      ...ruled('PROVISIONAL_D_N', 'primary_portal_type'),
     ],
     wikiStatus: null,
   };
@@ -341,7 +354,7 @@ function mapPolimi(f: FixtureNode, file: string): GoldenNode[] {
       }),
     ),
     slots: slots('HOUSING'),
-    rulingCovered: ruled(RULINGS.GOLDEN, 'official_info_url', 'critical_rules_json'),
+    uncitedBasis: ruled('FIXTURE_VALUE_UNCITED', 'official_info_url', 'critical_rules_json'),
     wikiStatus: null,
   };
 
@@ -446,11 +459,11 @@ function mapPolimi(f: FixtureNode, file: string): GoldenNode[] {
       }),
     ),
     slots: slots('PROGRAM_SPEC'),
-    rulingCovered: [
-      ...ruled(RULINGS.B3_FIXTURE, 'scholarship_waiver_codes_json'),
-      ...ruled(RULINGS.B3_PRIOR, 'accepted_prior_fields_json'),
+    uncitedBasis: [
+      ...ruled('SPEC_G7', 'scholarship_waiver_codes_json'),
+      ...ruled('RULING_B3', 'accepted_prior_fields_json'),
       ...ruled(
-        RULINGS.GOLDEN,
+        'FIXTURE_VALUE_UNCITED',
         'required_entrance_exams_json',
         'program.degree_level',
         'program.instruction_language',
@@ -536,7 +549,7 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
     score,
     citations: l1.citations(pathMapper('rules_payload_json')),
     slots: slots('COUNTRY'),
-    rulingCovered: [],
+    uncitedBasis: [],
     wikiStatus: null,
   };
 
@@ -569,7 +582,7 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
       }),
     ),
     slots: slots('CITY'),
-    rulingCovered: ruled(RULINGS.GOLDEN, 'city_name_en'),
+    uncitedBasis: ruled('FIXTURE_VALUE_UNCITED', 'city_name_en'),
     wikiStatus: null,
   };
 
@@ -614,10 +627,10 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
       }),
     ),
     slots: slots('ORIGIN_EQUIVALENCY'),
-    rulingCovered: [
-      ...ruled(RULINGS.D_A, 'equivalency_policy'),
+    uncitedBasis: [
+      ...ruled('RULING_D_A', 'equivalency_policy'),
       ...ruled(
-        RULINGS.GOLDEN,
+        'FIXTURE_VALUE_UNCITED',
         'national_recognition_lead_days',
         'paper_apostille_accepted',
         'e_apostille_accepted',
@@ -671,7 +684,7 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
       }),
     ),
     slots: slots('UNIVERSITY'),
-    rulingCovered: ruled(RULINGS.GOLDEN, 'institution_type', 'primary_portal_type'),
+    uncitedBasis: ruled('FIXTURE_VALUE_UNCITED', 'institution_type', 'primary_portal_type'),
     wikiStatus: null,
   };
 
@@ -702,7 +715,7 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
       pathMapper('critical_rules_json', { warsaw_halls_2026_2027_pln_monthly: 'halls_json' }),
     ),
     slots: slots('HOUSING'),
-    rulingCovered: ruled(RULINGS.GOLDEN, 'official_info_url', 'non_refundable_on_visa_denial'),
+    uncitedBasis: ruled('FIXTURE_VALUE_UNCITED', 'official_info_url', 'non_refundable_on_visa_denial'),
     wikiStatus: null,
   };
 
@@ -811,11 +824,11 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
       }),
     ),
     slots: slots('PROGRAM_SPEC'),
-    rulingCovered: [
-      ...ruled(RULINGS.B3_FIXTURE, 'scholarship_waiver_codes_json'),
-      ...ruled(RULINGS.B3_PRIOR, 'accepted_prior_fields_json'),
+    uncitedBasis: [
+      ...ruled('SPEC_G7', 'scholarship_waiver_codes_json'),
+      ...ruled('RULING_B3', 'accepted_prior_fields_json'),
       ...ruled(
-        RULINGS.GOLDEN,
+        'FIXTURE_VALUE_UNCITED',
         'required_entrance_exams_json',
         'program.degree_level',
         'program.instruction_language',
@@ -863,7 +876,7 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
       citations: [],
       slots: {},
       // D-f: no quotes exist for the comparators; every required value is ruled
-      rulingCovered: ruled(RULINGS.D_F, ...LAYERS.PROGRAM_SPEC.requiredPaths),
+      uncitedBasis: ruled('RULING_D_F', ...LAYERS.PROGRAM_SPEC.requiredPaths),
       wikiStatus: 'ACTIVE',
     };
   });

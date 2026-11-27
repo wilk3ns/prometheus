@@ -15,7 +15,8 @@
     "smoke:t1": "node ../../scripts/with-local-env.mjs ALLOW_LOCAL_FIXTURE_HOSTS=true node dist/ops/smoke-t1.js",
     "import-golden": "node ../../scripts/with-local-env.mjs node dist/cli.js import-golden",
     "verify-target": "node ../../scripts/with-local-env.mjs node dist/cli.js verify-target",
-    "build-baseline": "node ../../scripts/with-local-env.mjs node dist/cli.js build-baseline"
+    "build-baseline": "node ../../scripts/with-local-env.mjs node dist/cli.js build-baseline",
+    "golden-provenance-report": "node ../../scripts/with-local-env.mjs node dist/cli.js golden-provenance-report"
   },
   "dependencies": {
     "@dbos-inc/dbos-sdk": "^5.7.0",

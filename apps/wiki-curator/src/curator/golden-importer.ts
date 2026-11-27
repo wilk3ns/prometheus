@@ -89,17 +89,17 @@ export function assertImportable(plan: GoldenPlan): void {
     const uncited = descriptor.requiredPaths.filter(
       (p) => !node.citations.some((c) => pathsOverlap(c.field_path, p)),
     );
-    const covered = new Set(node.rulingCovered.map((r) => r.path));
+    const covered = new Set(node.uncitedBasis.map((r) => r.path));
     const unruled = uncited.filter((p) => !covered.has(p));
     if (unruled.length > 0) {
       throw new GoldenNodeInvalidError(
-        `${plan.file} ${node.layer} ${node.nodeKey}: uncited required path(s) not covered by a ruling: ${unruled.join(', ')}`,
+        `${plan.file} ${node.layer} ${node.nodeKey}: uncited required path(s) without a stated basis: ${unruled.join(', ')}`,
       );
     }
     const stale = [...covered].filter((p) => !uncited.includes(p));
     if (stale.length > 0) {
       throw new GoldenNodeInvalidError(
-        `${plan.file} ${node.layer} ${node.nodeKey}: stale ruling entries (now cited or not required): ${stale.join(', ')}`,
+        `${plan.file} ${node.layer} ${node.nodeKey}: stale uncited-basis entries (now cited or not required): ${stale.join(', ')}`,
       );
     }
     if (node.depth === 'DEEP_VERIFIED' && node.citations.length === 0) {
@@ -166,8 +166,8 @@ export async function importGolden(deps: GoldenImportDeps, plan: GoldenPlan): Pr
         actor: 'GOLDEN_FIXTURE',
         reason: `golden import ${plan.compiledKey}`,
         verifiedAt: deps.clock.now(),
-        evidenceBasis: 'ARCHITECT_RULING',
-        rulingCoveredPaths: node.rulingCovered,
+        evidenceBasis: 'GOLDEN_FIXTURE',
+        uncitedBasis: node.uncitedBasis,
       });
       nodes.push({
         layer: node.layer,
