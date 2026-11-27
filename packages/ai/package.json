@@ -1,0 +1,28 @@
+{
+  "name": "@prometheus/ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "@prometheus/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node ../../scripts/copy-assets.mjs src/prompts dist/prompts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src test"
+  },
+  "dependencies": {
+    "@google/genai": "^3.6.1",
+    "@prometheus/contracts": "workspace:*",
+    "@prometheus/db": "workspace:*",
+    "@prometheus/infra-ports": "workspace:*",
+    "@prometheus/kernel": "workspace:*",
+    "kysely": "^0.29.9",
+    "openai": "^7.64.0",
+    "zod": "^4.6.7"
+  }
+}

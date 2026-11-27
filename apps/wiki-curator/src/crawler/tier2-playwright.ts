@@ -133,7 +133,7 @@ export class PlaywrightJsRenderer implements JsRendererPort {
   }
 
   /** Socket attempts that bypassed layers 1-2 and were swallowed by the fail-closed proxy (should be 0). */
-  get blockedEgressConnections(): number {
+  blockedProxyRequests(): number {
     return this.blackhole.blockedConnections;
   }
 

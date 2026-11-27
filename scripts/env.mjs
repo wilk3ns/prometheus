@@ -21,6 +21,10 @@ export const LOCAL_DEFAULTS = {
   FIXTURE_SITES_ORIGIN: 'http://localhost:8088',
   FIXTURE_CANARY_ORIGIN: 'http://localhost:8089',
   SECRETS_DIR: join(REPO_ROOT, '.secrets'),
+  // ENG-T2 §3.4: replay is the default model mode and needs zero API keys (committed cassettes).
+  AI_MODE: 'replay',
+  AI_CASSETTE_DIR: join(REPO_ROOT, 'cassettes'),
+  CORE_HTTP_PORT: '8787',
 };
 
 export function applyLocalDefaults(env = process.env) {

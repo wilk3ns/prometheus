@@ -16,6 +16,7 @@ function toTarget(row: Selectable<WikiCrawlTarget>): CrawlTargetRow {
   return {
     id: row.id,
     targetKey: row.target_key,
+    countryIso2: row.country_iso2,
     layerHint: LayerHint.parse(row.layer_hint),
     seedUrls: SeedUrls.parse(row.seed_urls_json),
     maxDepth: row.max_depth,

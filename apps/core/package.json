@@ -1,0 +1,25 @@
+{
+  "name": "@prometheus/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src test",
+    "start": "node ../../scripts/with-local-env.mjs node dist/server.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.11",
+    "@prometheus/ai": "workspace:*",
+    "@prometheus/config": "workspace:*",
+    "@prometheus/contracts": "workspace:*",
+    "@prometheus/db": "workspace:*",
+    "@prometheus/infra-adapters": "workspace:*",
+    "@prometheus/infra-ports": "workspace:*",
+    "@prometheus/kernel": "workspace:*",
+    "hono": "^4.13.22",
+    "kysely": "^0.29.9",
+    "zod": "^4.6.7"
+  }
+}

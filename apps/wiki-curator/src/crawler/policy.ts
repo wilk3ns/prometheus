@@ -4,6 +4,8 @@ export const CRAWL_POLICY = {
   tier1TimeoutMs: 15_000,
   /** Hard cap on any response body (streamed; aborts beyond). */
   maxBodyBytes: 15 * 1024 * 1024,
+  /** Hard cap on the clean text an extraction worker may return (UTF-8 bytes; ENG-T2 §0 Q5). */
+  maxCleanTextBytes: 15 * 1024 * 1024,
   /** Tier 1 HTML with fewer clean characters than this escalates to Tier 2. */
   minTier1CleanChars: 500,
   maxRedirects: 10,

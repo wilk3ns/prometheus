@@ -1,0 +1,20 @@
+{
+  "name": "@prometheus/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint test smoke-t2.ts"
+  },
+  "dependencies": {
+    "@prometheus/ai": "workspace:*",
+    "@prometheus/config": "workspace:*",
+    "@prometheus/contracts": "workspace:*",
+    "@prometheus/db": "workspace:*",
+    "@prometheus/infra-adapters": "workspace:*",
+    "@prometheus/kernel": "workspace:*",
+    "kysely": "^0.29.9",
+    "zod": "^4.6.7"
+  }
+}

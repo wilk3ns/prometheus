@@ -98,6 +98,9 @@ export class ScriptedRenderer implements JsRendererPort {
     this.rendered.push(url.href);
     return Promise.resolve(this.respond(url.href));
   }
+  blockedProxyRequests(): number {
+    return 0;
+  }
   close(): Promise<void> {
     return Promise.resolve();
   }
@@ -114,6 +117,7 @@ export function target(overrides: Partial<CrawlTargetRow> = {}): CrawlTargetRow 
   return {
     id: ids().next(),
     targetKey: 'fixture:unit:2027-FALL',
+    countryIso2: 'PL',
     layerHint: 'PROGRAM',
     seedUrls: ['https://pw.edu.pl/hub'],
     maxDepth: 2,

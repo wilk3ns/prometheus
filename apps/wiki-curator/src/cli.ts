@@ -1,13 +1,30 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { loadWikiCuratorConfig } from '@prometheus/config';
-import { openCrawlSession, openRuntime } from './bootstrap.js';
+import { isAbsolute, join } from 'node:path';
+import { AdmissionSeason } from '@prometheus/contracts';
+import { loadAiConfig, loadCacheConfig, loadWikiCuratorConfig } from '@prometheus/config';
+import {
+  openCrawlSession,
+  openDurableCurator,
+  openModelRouter,
+  openRuntime,
+  openWikiServices,
+  type CuratorRuntime,
+} from './bootstrap.js';
+import { importGolden, readGoldenPlan } from './curator/golden-importer.js';
+import { goldenProvenanceReport } from './curator/golden-provenance.js';
+import { layerForHint } from './curator/layers.js';
+import type { BaselineTargetSpec } from './curator/workflows.js';
 import { runCrawlBatch } from './ops/crawl-batch.js';
 import { applySeed, readSeedFile } from './seed/seed.js';
 
 const USAGE = `usage:
-  wiki-curator seed  --file <absolute path to seed-targets-v1.0 JSON>
-  wiki-curator crawl --target <target_key> | --all`;
+  wiki-curator seed           --file <absolute path to seed-targets-v1.0 JSON>
+  wiki-curator crawl          --target <target_key> | --all
+  wiki-curator import-golden  --file <absolute path to a wiki-v2.0 golden JSON>
+  wiki-curator verify-target  --target <target_key> [--node-key <key>] [--season <YYYY-FALL>]
+  wiki-curator build-baseline --season <YYYY-FALL> --batch <id> (--target <target_key> | --all)
+  wiki-curator golden-provenance-report [--fixture <abs golden JSON> ...]  (default: both vault golden fixtures)`;
 
 class UsageError extends Error {
   override readonly name = 'UsageError';
@@ -21,6 +38,10 @@ async function main(argv: readonly string[]): Promise<void> {
       file: { type: 'string' },
       target: { type: 'string' },
       all: { type: 'boolean', default: false },
+      season: { type: 'string' },
+      batch: { type: 'string' },
+      'node-key': { type: 'string' },
+      fixture: { type: 'string', multiple: true },
     },
     strict: true,
   });
@@ -70,7 +91,131 @@ async function main(argv: readonly string[]): Promise<void> {
     return;
   }
 
+  if (command === 'golden-provenance-report') {
+    // pure: maps the fixtures and reports every uncited required value with its basis (no database)
+    const files = values.fixture ?? defaultGoldenFiles();
+    for (const f of files) if (!isAbsolute(f)) throw new UsageError(`--fixture must be absolute: ${f}`);
+    const plans = await Promise.all(files.map((f) => readGoldenPlan(f)));
+    console.log(JSON.stringify(goldenProvenanceReport(plans), null, 2));
+    return;
+  }
+
+  if (command === 'import-golden') {
+    if (!values.file || !isAbsolute(values.file))
+      throw new UsageError('import-golden requires an absolute --file');
+    // map + validate (and fail on any TODO_RULING) before opening a single connection
+    const plan = await readGoldenPlan(values.file);
+    await withWiki(async (runtime, services) => {
+      const result = await importGolden({ ...services, clock: runtime.clock }, plan);
+      console.log(
+        JSON.stringify({
+          command: 'import-golden',
+          file: result.file,
+          compiledKey: result.compiledKey,
+          nodes: result.nodes,
+          cards: result.cards.map((c) => ({ kind: c.kind, nodeId: c.node_id, estTokens: c.est_tokens })),
+          lockConflicts: result.lockConflicts,
+        }),
+      );
+    });
+    return;
+  }
+
+  if (command === 'verify-target') {
+    if (!values.target) throw new UsageError('verify-target requires --target');
+    const targetKey = values.target;
+    await withWiki(async (runtime, services) => {
+      const target = await runtime.repo.findTargetByKey(targetKey);
+      if (!target) throw new UsageError(`unknown target_key ${targetKey}`);
+      const layer = layerForHint(target.layerHint);
+      // HIGH-2: the node is bound to the target (PROGRAM: its key) or named by ops (--node-key); never by a model
+      const nodeKey = bindNodeKey(layer, targetKey, values['node-key']);
+      const season = AdmissionSeason.parse(values.season ?? nodeKey.slice(nodeKey.lastIndexOf(':') + 1));
+      const router = await openModelRouter(runtime, loadAiConfig(process.env));
+      const durable = await openDurableCurator(runtime, services, router);
+      try {
+        const existing = await services.layers.findNode(layer, nodeKey);
+        const result = await durable.workflows.verify(
+          { layer, nodeKey, season, targetKey, countryIso2: target.countryIso2 },
+          existing?.version ?? 0,
+        );
+        console.log(JSON.stringify({ command: 'verify-target', ...result, cards: result.cards.length }));
+        if (result.status === 'ABORTED') process.exitCode = 1;
+      } finally {
+        await durable.close();
+      }
+    });
+    return;
+  }
+
+  if (command === 'build-baseline') {
+    if (!values.season || !values.batch) throw new UsageError('build-baseline requires --season and --batch');
+    if (!values.target === !values.all)
+      throw new UsageError('build-baseline requires exactly one of --target or --all');
+    const season = AdmissionSeason.parse(values.season);
+    const batch = values.batch;
+    await withWiki(async (runtime, services) => {
+      const rows = values.target
+        ? [await runtime.repo.findTargetByKey(values.target)].filter((t) => t !== undefined)
+        : await runtime.repo.listActiveTargets();
+      if (rows.length === 0) throw new UsageError('no crawl targets selected');
+      const specs: BaselineTargetSpec[] = rows.map((t) => {
+        const layer = layerForHint(t.layerHint);
+        // a single explicit target may carry an ops-supplied --node-key; unbound targets are skipped by WF-19
+        const opsKey = values.target === undefined ? undefined : values['node-key'];
+        const nodeKey =
+          layer === 'PROGRAM_SPEC' || opsKey !== undefined ? bindNodeKey(layer, t.targetKey, opsKey) : null;
+        return { targetKey: t.targetKey, layer, nodeKey, countryIso2: t.countryIso2 };
+      });
+      const router = await openModelRouter(runtime, loadAiConfig(process.env));
+      const durable = await openDurableCurator(runtime, services, router);
+      try {
+        const result = await durable.workflows.baseline(season, batch, specs);
+        console.log(JSON.stringify({ command: 'build-baseline', ...result }));
+        if (result.targets.some((t) => t.status === 'ABORTED')) process.exitCode = 1;
+      } finally {
+        await durable.close();
+      }
+    });
+    return;
+  }
+
   throw new UsageError(`unknown command ${command ?? ''}`);
+}
+
+/** PROGRAM targets are keyed like their node; other layers need an ops-supplied key. */
+function bindNodeKey(layer: string, targetKey: string, opsKey: string | undefined): string {
+  if (layer === 'PROGRAM_SPEC') {
+    if (opsKey !== undefined && opsKey !== targetKey) {
+      throw new UsageError(`PROGRAM targets are bound to their own key ${targetKey}`);
+    }
+    return targetKey;
+  }
+  if (opsKey === undefined) throw new UsageError(`${layer} targets need an ops-supplied --node-key`);
+  return opsKey;
+}
+
+function defaultGoldenFiles(): string[] {
+  const vault = process.env['PROMETHEUS_VAULT_DIR'];
+  if (vault === undefined || !isAbsolute(vault)) {
+    throw new UsageError('golden-provenance-report needs --fixture or an absolute PROMETHEUS_VAULT_DIR');
+  }
+  return ['golden-polimi-msc-cse-2027.json', 'golden-wut-bsc-cs-2027.json'].map((f) =>
+    join(vault, 'engineering', 'fixtures', f),
+  );
+}
+
+async function withWiki(
+  work: (runtime: CuratorRuntime, services: ReturnType<typeof openWikiServices>) => Promise<void>,
+): Promise<void> {
+  const runtime = await openRuntime(loadWikiCuratorConfig(process.env));
+  const services = openWikiServices(runtime, loadCacheConfig(process.env));
+  try {
+    await work(runtime, services);
+  } finally {
+    await services.close();
+    await runtime.close();
+  }
 }
 
 main(process.argv.slice(2)).catch((error: unknown) => {

@@ -1,0 +1,17 @@
+{
+  "key": "8be612907c4624641d39c4b663a56bd2dc7e93ff53a9d82122c05c87b6a06e6e",
+  "material": {
+    "route": "RTE-wiki.baseline_extract",
+    "promptHash": "adf3a7fcde67f0a60628a4b3f008082aa6f236b8ef709a6bebbb7114aff7ffa1",
+    "tier": "gg.flash",
+    "excludeFamily": null,
+    "inputHash": "8078fdf6f5227fb41417fb458acef639c9a313de944f1da21791f6447f1bb54a"
+  },
+  "note": "curator-verify baseabstain: WF-19 baseline_extract (gg.flash)",
+  "response": {
+    "kind": "GENERATE",
+    "text": "{\"layer\":\"PROGRAM_SPEC\",\"node_key\":\"t2verify:bsc-baseabstain:2027-FALL\",\"fields\":{\"program_id\":\"t2verify:bsc-baseabstain\",\"admission_season\":\"2027-FALL\",\"tuition_annual_eur\":0,\"scholarship_waiver_codes_json\":[],\"accepted_prior_fields_json\":{\"exact\":[\"MATH_PHYSICS\",\"STEM_QRUP_1\"],\"adjacent\":[]},\"predicted_grades_accepted\":false,\"min_gpa_100\":null,\"min_math_100\":null,\"high_school_emi_accepted\":false,\"min_bsc_emi_pct\":null,\"min_english_requirements_json\":{\"min_cefr\":\"B2\",\"accepted_tests\":[{\"exam\":\"IELTS_ACADEMIC\",\"min_score\":6,\"valid_from\":null,\"valid_until\":null},{\"exam\":\"TOEFL_IBT\",\"min_score\":87,\"valid_from\":null,\"valid_until\":null}],\"rejected_tests\":[],\"other_accepted\":[]},\"required_entrance_exams_json\":[],\"schooling_11yr_override\":null,\"app_window_open_at\":null,\"app_window_close_at\":\"2027-07-15T23:59:00+02:00\",\"qualified_docs_deadline_at\":null,\"classes_start_date\":\"2027-10-01\",\"official_portal_fee_eur_cents\":null,\"program_requirements_json\":{\"core_modules\":[\"Algorithms\",\"Operating Systems\"]},\"program\":{\"id\":\"t2verify:bsc-baseabstain\",\"university_id\":\"t2verify\",\"name_en\":\"Computer Science\",\"name_local\":null,\"degree_level\":\"BACHELOR\",\"field_code\":\"CS_IT\",\"instruction_language\":\"en\",\"duration_semesters\":7,\"ects_total\":210,\"official_program_url\":\"https://www.pw.edu.pl/t2verify/baseabstain\"}},\"slot_completeness\":{\"program_deadlines_and_fees\":{\"status\":\"VERIFIED_CURRENT\",\"season\":\"2027-2028\"}},\"abstain_fields\":[\"program\"],\"citations\":[{\"field_path\":\"required_entrance_exams_json\",\"snapshot_id\":\"0193f2a0-0000-7000-8000-000000000006\",\"source_url\":\"https://www.pw.edu.pl/t2verify/baseabstain\",\"verbatim_quote\":\"No entrance examination is required.\",\"retrieved_at\":\"2026-11-26T00:00:00.000Z\"}]}",
+    "inputTokens": 2000,
+    "outputTokens": 700
+  }
+}

@@ -6,3 +6,7 @@ db/schema.sql
 packages/db/src/generated
 deploy/compose/fixture-sites/public/
 .secrets
+# Versioned prompts are hash-locked (packages/ai/src/prompts/*/meta.ts): never reformat them
+packages/ai/src/prompts/**/*.md
+packages/ai/src/prompts/**/*.tmpl
+cassettes

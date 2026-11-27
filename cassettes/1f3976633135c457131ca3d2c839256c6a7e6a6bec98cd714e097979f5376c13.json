@@ -1,0 +1,17 @@
+{
+  "key": "1f3976633135c457131ca3d2c839256c6a7e6a6bec98cd714e097979f5376c13",
+  "material": {
+    "route": "RTE-wiki.baseline_extract",
+    "promptHash": "adf3a7fcde67f0a60628a4b3f008082aa6f236b8ef709a6bebbb7114aff7ffa1",
+    "tier": "gg.flash",
+    "excludeFamily": null,
+    "inputHash": "2ef8b40a999ab0b9bca76a8e8ef41397cba5842c74acdbbb3a9ddec648ced347"
+  },
+  "note": "curator-verify foreignorigin: WF-19 baseline_extract (gg.flash)",
+  "response": {
+    "kind": "GENERATE",
+    "text": "{\"layer\":\"ORIGIN_EQUIVALENCY\",\"node_key\":\"PL:**:**:IB:2027-FALL\",\"fields\":{\"destination_country_iso2\":\"PL\",\"citizenship_country\":\"**\",\"diploma_origin_country\":\"**\",\"diploma_type\":\"IB\",\"admission_season\":\"2027-FALL\",\"equivalency_policy\":\"DIRECT\",\"national_recognition_lead_days\":0,\"ru_sector_translation_exempt\":false,\"paper_apostille_accepted\":true,\"e_apostille_accepted\":true,\"minor_consents_json\":[],\"legalization_rules_json\":{}},\"slot_completeness\":{\"program_deadlines_and_fees\":{\"status\":\"VERIFIED_CURRENT\",\"season\":\"2027-2028\"}},\"abstain_fields\":[],\"citations\":[{\"field_path\":\"equivalency_policy\",\"snapshot_id\":\"0193f2a0-0000-7000-8000-000000000007\",\"source_url\":\"https://www.pw.edu.pl/t2verify/origin-rules\",\"verbatim_quote\":\"International Baccalaureate holders are admitted directly to Bachelor programmes.\",\"retrieved_at\":\"2026-11-26T00:00:00.000Z\"}]}",
+    "inputTokens": 2000,
+    "outputTokens": 700
+  }
+}

@@ -3,7 +3,9 @@
  *
  * Layering (allowed direction ->):
  *   kernel <- contracts <- infra-ports <- infra-adapters
- *   kernel, contracts, config, db, infra-ports, infra-adapters <- apps/*
+ *   kernel, contracts, db, infra-ports <- ai (ModelRouter; vendor SDKs only in packages/ai/src/adapters)
+ *   kernel, contracts, config, db, infra-ports, infra-adapters, ai <- apps/*
+ *   apps/core never imports apps/wiki-curator (the single Wiki writer) and vice versa (ENG-T2 Gate 1).
  * Vendor SDKs are confined to the single adapter file that wraps them.
  */
 const VENDOR_OWNERS = [
@@ -42,7 +44,24 @@ const VENDOR_OWNERS = [
   {
     sdk: 'kysely',
     path: '(^|/)node_modules/kysely/',
-    owner: '^(packages/db/(src|test)/|apps/wiki-curator/src/persistence/|apps/wiki-curator/test/)',
+    owner:
+      '^(packages/db/(src|test)/|packages/ai/src/econ/kysely-|packages/ai/test/|apps/wiki-curator/src/persistence/|apps/wiki-curator/test/|apps/core/src/modules/[^/]+/infra/|apps/core/test/)',
+  },
+  { sdk: 'openai', path: '(^|/)node_modules/openai/', owner: '^packages/ai/src/adapters/openai[.]ts$' },
+  {
+    sdk: '@google/genai',
+    path: '(^|/)node_modules/@google/genai/',
+    owner: '^packages/ai/src/adapters/gemini[.]ts$',
+  },
+  {
+    sdk: '@dbos-inc',
+    path: '(^|/)node_modules/@dbos-inc/',
+    owner: '^apps/wiki-curator/src/curator/(workflows|durable)[.]ts$',
+  },
+  {
+    sdk: 'hono',
+    path: '(^|/)node_modules/(hono|@hono)/',
+    owner: '^apps/core/(src/(http/app|server)[.]ts|test/)',
   },
 ];
 
@@ -103,10 +122,54 @@ module.exports = {
     },
     {
       name: 'crawler-core-stays-off-adapters',
-      comment: 'crawler modules depend on ports; only bootstrap.ts (composition root) picks adapters',
+      comment: 'crawler/curator modules depend on ports; only bootstrap.ts (composition root) picks adapters',
       severity: 'error',
-      from: { path: '^apps/wiki-curator/src/(crawler|seed|persistence)/' },
+      from: { path: '^apps/wiki-curator/src/(crawler|curator|seed|persistence)/' },
       to: { path: '^packages/infra-adapters/' },
+    },
+    {
+      name: 'curator-uses-repository-ports',
+      comment: 'curator code talks to repository ports, never to Kysely implementations',
+      severity: 'error',
+      from: { path: '^apps/wiki-curator/src/curator/' },
+      to: { path: '^apps/wiki-curator/src/persistence/kysely-' },
+    },
+    {
+      name: 'core-never-imports-curator',
+      comment: 'apps/core (app_core, SELECT-only on wiki.*) cannot reach the wiki_writer app or its adapters',
+      severity: 'error',
+      from: { path: '^apps/core/' },
+      to: { path: '^apps/wiki-curator/' },
+    },
+    {
+      name: 'curator-never-imports-core',
+      severity: 'error',
+      from: { path: '^apps/wiki-curator/' },
+      to: { path: '^apps/core/' },
+    },
+    {
+      name: 'core-modules-via-index',
+      comment: 'outside a module, only its public modules/<m>/index.ts may be imported (ENG-01 §1)',
+      severity: 'error',
+      from: { path: '^apps/core/src/', pathNot: '^apps/core/src/modules/' },
+      to: { path: '^apps/core/src/modules/[^/]+/', pathNot: '^apps/core/src/modules/[^/]+/index[.]ts$' },
+    },
+    {
+      name: 'matching-domain-is-pure',
+      comment: 'the $0 L1 engine has zero I/O: domain code imports only contracts, kernel and its own domain',
+      severity: 'error',
+      from: { path: '^apps/core/src/modules/[^/]+/domain/' },
+      to: {
+        path: '^(packages|apps)/|(^|/)node_modules/',
+        pathNot: '^(packages/(contracts|kernel)/|apps/core/src/modules/[^/]+/domain/)|(^|/)node_modules/zod/',
+      },
+    },
+    {
+      name: 'ai-package-boundaries',
+      comment: 'packages/ai depends only on kernel, contracts, db and infra-ports',
+      severity: 'error',
+      from: { path: '^packages/ai/' },
+      to: { path: '^(packages|apps)/', pathNot: '^packages/(ai|kernel|contracts|db|infra-ports)/' },
     },
     {
       name: 'crawler-uses-repository-port',

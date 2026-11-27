@@ -10,8 +10,18 @@
  *     disabled so WebRTC/WebTransport cannot fall back to direct UDP.
  */
 
-/** Globals removed from every window realm (main frame, iframes, about:blank children). */
+/**
+ * Globals removed from every window realm (main frame, iframes, about:blank children). Worker constructors
+ * are removed too (ENG-T2 §0 Q5): init scripts never run inside worker realms, so layers 1-2 cannot hold
+ * there and a page must not be able to create one at all. Service workers are additionally blocked at the
+ * context level (`serviceWorkers: 'block'`); layer 3 stays the backstop for any realm we missed.
+ */
 export const REMOVED_SOCKET_APIS: readonly string[] = [
+  'Worker',
+  'SharedWorker',
+  'ServiceWorker',
+  'ServiceWorkerContainer',
+  'ServiceWorkerRegistration',
   'RTCPeerConnection',
   'webkitRTCPeerConnection',
   'RTCDataChannel',

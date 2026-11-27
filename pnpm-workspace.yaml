@@ -1,3 +1,11 @@
 packages:
   - packages/*
   - apps/*
+  - tests/*
+
+# Dependency install scripts are denied by default. These two are known and not needed:
+# esbuild ships its platform binary as an optional dependency; protobufjs (via @google/genai) only runs a
+# version-check postinstall.
+allowBuilds:
+  esbuild: false
+  protobufjs: false

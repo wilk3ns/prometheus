@@ -1,13 +1,13 @@
 // Database tooling: dbmate migrations, deterministic schema dump (db/schema.sql) and Kysely codegen.
-//   node scripts/db.mjs migrate   -> dbmate up, dump db/schema.sql, regenerate Kysely types
+//   node scripts/db.mjs migrate   -> dbmate up, DBOS system schema, dump db/schema.sql, regenerate Kysely types
 //   node scripts/db.mjs rollback  -> dbmate rollback (one step)
 //   node scripts/db.mjs reset     -> drop + up; only for databases named *_it (integration tests)
-//   node scripts/db.mjs verify    -> on a scratch database: up -> dump A -> down -> up -> dump B;
+//   node scripts/db.mjs verify    -> on a scratch database: up -> dump A -> down (ALL) -> up -> dump B;
 //                                    asserts A == B == committed db/schema.sql and Kysely types up to date
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { REPO_ROOT, adminUrl, applyLocalDefaults, required } from './env.mjs';
 
 applyLocalDefaults();
@@ -59,6 +59,8 @@ function dumpSchema(database) {
       '--schema-only',
       '--no-owner',
       '--restrict-key=prometheusschemadump',
+      // DBOS owns and versions its own system schema (scripts/dbos-migrate.mjs); it is not a dbmate artifact.
+      '--exclude-schema=dbos',
       database,
     ],
     { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
@@ -108,7 +110,11 @@ function codegen(database, outFile) {
       '--url',
       adminUrl(database),
       '--include-pattern',
-      'wiki.*',
+      '(wiki|econ).*',
+      // `date` columns stay 'YYYY-MM-DD' strings (packages/db registers the matching pg type parser), so
+      // calendar dates never pick up a local-timezone shift.
+      '--date-parser',
+      'string',
       '--out-file',
       outFile,
       '--log-level',
@@ -143,11 +149,24 @@ function psql(database, sql) {
   ).trim();
 }
 
+function dbosMigrate(database) {
+  const res = spawnSync(process.execPath, [`${REPO_ROOT}scripts/dbos-migrate.mjs`, database], {
+    stdio: 'inherit',
+  });
+  if (res.status !== 0) throw new Error(`dbos migrate failed (${database})`);
+}
+
+/** Number of committed dbmate migrations (verify rolls ALL of them back, not just the latest). */
+function migrationCount() {
+  return readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).length;
+}
+
 const command = process.argv[2];
 const database = required('PG_DATABASE');
 
 if (command === 'migrate') {
   dbmate(database, 'up');
+  dbosMigrate(database);
   writeFileSync(SCHEMA_FILE, dumpSchema(database));
   codegen(database, TYPES_FILE);
   console.log(`db:migrate OK -> ${database}; wrote db/schema.sql and packages/db/src/generated/db.ts`);
@@ -157,6 +176,7 @@ if (command === 'migrate') {
     throw new Error(`db reset refuses to touch '${database}' (name must end in _it)`);
   dbmate(database, 'drop');
   dbmate(database, 'up');
+  dbosMigrate(database);
   console.log(`db:reset OK -> ${database}`);
 } else if (command === 'rollback') {
   dbmate(database, 'rollback');
@@ -167,9 +187,12 @@ if (command === 'migrate') {
   try {
     dbmate(scratch, 'up');
     const first = dumpSchema(scratch);
-    dbmate(scratch, 'rollback');
-    const wikiAfterDown = psql(scratch, "SELECT count(*) FROM pg_namespace WHERE nspname = 'wiki'");
-    if (wikiAfterDown !== '0') throw new Error('migrate:down left schema wiki in place');
+    for (let i = 0; i < migrationCount(); i += 1) dbmate(scratch, 'rollback');
+    const leftover = psql(
+      scratch,
+      "SELECT count(*) FROM pg_namespace WHERE nspname IN ('wiki','econ','matching')",
+    );
+    if (leftover !== '0') throw new Error('migrate:down left schema wiki/econ/matching in place');
     dbmate(scratch, 'up');
     const second = dumpSchema(scratch);
     if (first !== second) throw new Error('schema differs between first up and up-after-down');

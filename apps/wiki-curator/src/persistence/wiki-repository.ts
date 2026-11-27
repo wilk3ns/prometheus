@@ -5,6 +5,8 @@ import type { Uuid } from '@prometheus/kernel';
 export interface CrawlTargetRow {
   readonly id: Uuid;
   readonly targetKey: string;
+  /** Destination country the target's nodes must belong to (HIGH-2 identity binding). */
+  readonly countryIso2: string;
   readonly layerHint: LayerHint;
   readonly seedUrls: readonly string[];
   readonly maxDepth: number;

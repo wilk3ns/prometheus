@@ -101,6 +101,8 @@ export function escapeProbe(id, origin, rawCanaryPort) {
     [typeof window.RTCPeerConnection, typeof window.webkitRTCPeerConnection, typeof window.RTCDataChannel,
       typeof window.WebTransport].join('/'),
   );
+  // ENG-T2 Q5: worker constructors must be absent (init scripts never run inside worker realms)
+  el.setAttribute('data-workers', [typeof window.Worker, typeof window.SharedWorker].join('/'));
 })();
 </script></body></html>`;
 }
