@@ -117,6 +117,7 @@ export function target(overrides: Partial<CrawlTargetRow> = {}): CrawlTargetRow 
   return {
     id: ids().next(),
     targetKey: 'fixture:unit:2027-FALL',
+    countryIso2: 'PL',
     layerHint: 'PROGRAM',
     seedUrls: ['https://pw.edu.pl/hub'],
     maxDepth: 2,

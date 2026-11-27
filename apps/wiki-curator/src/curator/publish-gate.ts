@@ -1,4 +1,5 @@
 import type { VerificationReport } from '@prometheus/contracts';
+import { pathsOverlap } from './paths.js';
 import type { ValidationError } from './validators.js';
 
 /**
@@ -36,17 +37,38 @@ export interface GateDecision {
 export function decidePublish(input: GateInput): GateDecision {
   const failures: GateFailure[] = [];
   if (input.validatorErrors.length > 0) failures.push('POST_VALIDATOR_ERRORS');
-  const abstainedRequired = input.requiredPaths.filter((p) => input.abstainFields.includes(p));
+  // hierarchy-aware: abstaining on `program` abstains on `program.degree_level` and vice versa (HIGH-1)
+  const abstainedRequired = input.requiredPaths.filter((p) =>
+    input.abstainFields.some((a) => pathsOverlap(a, p)),
+  );
   if (abstainedRequired.length > 0) failures.push('REQUIRED_PATHS_ABSTAINED');
   let uncheckedPaths: string[] = [...input.requiredPaths];
   if (input.report === undefined) {
     failures.push('NO_VERIFICATION_REPORT');
   } else {
-    const checked = new Set(input.report.checked_paths);
-    uncheckedPaths = input.requiredPaths.filter((p) => !checked.has(p));
+    const checked = input.report.checked_paths;
+    // a checked ancestor covers its descendants; a checked child does not cover the whole parent
+    uncheckedPaths = input.requiredPaths.filter(
+      (p) => !checked.some((c) => c === p || p.startsWith(`${c}.`)),
+    );
     if (input.report.discrepancies.length > 0) failures.push('DISCREPANCIES');
     if (!(input.report.verification_score >= DEEP_VERIFIED_MIN_SCORE)) failures.push('SCORE_BELOW_THRESHOLD');
     if (uncheckedPaths.length > 0) failures.push('REQUIRED_PATHS_UNCHECKED');
   }
   return { pass: failures.length === 0, failures, uncheckedPaths, abstainedRequired };
+}
+
+/**
+ * Deterministic part of the gate, for BASELINE commits (WF-19, no Agent B): 0 validator errors (which include
+ * REQUIRED_PATH_UNCITED) and no required-path abstention. Failing it means the node is never matchable (P1).
+ */
+export function decideBaselinePublish(input: Omit<GateInput, 'report'>): GateDecision {
+  const full = decidePublish({ ...input, report: undefined });
+  const failures = full.failures.filter((f) => f !== 'NO_VERIFICATION_REPORT');
+  return {
+    pass: failures.length === 0,
+    failures,
+    uncheckedPaths: [],
+    abstainedRequired: full.abstainedRequired,
+  };
 }

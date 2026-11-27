@@ -13,6 +13,26 @@ import {
  * The only file that may import the `openai` SDK. Output text is returned raw; the router Zod-parses it.
  * SDK-level retries are disabled: the router owns retries, failover and budget.
  */
+/** The usage fields the Responses API bills. */
+export interface OpenAiUsage {
+  readonly input_tokens: number;
+  readonly output_tokens: number;
+  readonly output_tokens_details?: { readonly reasoning_tokens?: number } | undefined;
+}
+
+/**
+ * HIGH-3 metering: on the Responses API `output_tokens` already INCLUDES reasoning tokens
+ * (`output_tokens_details.reasoning_tokens` is a breakdown of it). Guarded so a provider-side change that
+ * reports reasoning outside `output_tokens` can never make the meter read less than the reasoning count.
+ */
+export function meterOpenAi(usage: OpenAiUsage | undefined): { inputTokens: number; outputTokens: number } {
+  const reasoning = usage?.output_tokens_details?.reasoning_tokens ?? 0;
+  return {
+    inputTokens: usage?.input_tokens ?? 0,
+    outputTokens: Math.max(usage?.output_tokens ?? 0, reasoning),
+  };
+}
+
 export interface OpenAiAdapterOptions {
   readonly apiKey: string;
   /** Azure OpenAI / EU data-zone base URL; `undefined` = api.openai.com. */
@@ -34,7 +54,8 @@ export class OpenAiAdapter implements ModelAdapterPort {
       ...(options.baseURL === undefined ? {} : { baseURL: options.baseURL }),
     });
     this.provider = options.baseURL === undefined ? 'openai' : 'openai-compatible-eu';
-    this.piiApproved = options.piiApproved;
+    // MEDIUM-6: the default (US) endpoint can never carry applicant data, whatever the option says
+    this.piiApproved = options.baseURL !== undefined && options.piiApproved;
   }
 
   async generate(request: GenerateRequest): Promise<GenerateResponse> {
@@ -63,8 +84,7 @@ export class OpenAiAdapter implements ModelAdapterPort {
       return {
         kind: 'OK',
         text,
-        inputTokens: response.usage?.input_tokens ?? 0,
-        outputTokens: response.usage?.output_tokens ?? 0,
+        ...meterOpenAi(response.usage),
       };
     } catch (error) {
       if (isAbort(error)) return { kind: 'TIMEOUT', detail: 'deadline exceeded' };

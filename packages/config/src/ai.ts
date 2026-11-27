@@ -17,8 +17,20 @@ const AiEnv = z.discriminatedUnion('AI_MODE', [
   z.object({
     AI_MODE: z.literal('live'),
     OPENAI_BASE_URL: z.url({ protocol: /^https$/ }).optional(),
-    /** Only an EU data-zone / Azure OpenAI EU endpoint may be marked as approved for applicant data. */
-    OPENAI_PII_APPROVED: z.enum(['true', 'false']).default('false'),
+    /**
+     * MEDIUM-6: approval for APPLICANT_PII is bound to an endpoint, not a boolean. Comma-separated hostnames of
+     * EU data-zone endpoints (e.g. `eu.api.openai.com`, an Azure OpenAI EU resource); applicant data goes to
+     * OpenAI only when OPENAI_BASE_URL points at one of them. Default: none (denied).
+     */
+    OPENAI_PII_EU_HOSTS: z
+      .string()
+      .default('')
+      .transform((v) =>
+        v
+          .split(',')
+          .map((h) => h.trim().toLowerCase())
+          .filter((h) => h !== ''),
+      ),
     GEMINI_MODE: z.enum(['direct', 'vertex']).default('direct'),
     VERTEX_PROJECT: z.string().min(1).optional(),
     VERTEX_LOCATION: z
@@ -38,6 +50,9 @@ export type AiConfig =
         | { readonly mode: 'vertex'; readonly project: string; readonly location: string };
     };
 
+/** Hostnames of the default (US) OpenAI API: never approved for applicant data. */
+const US_OPENAI_HOSTS: ReadonlySet<string> = new Set(['api.openai.com']);
+
 export function loadAiConfig(env: Readonly<Record<string, string | undefined>>): AiConfig {
   const parsed = AiEnv.safeParse({ AI_MODE: 'replay', ...stripEmpty(env) });
   if (!parsed.success) {
@@ -48,9 +63,19 @@ export function loadAiConfig(env: Readonly<Record<string, string | undefined>>):
   if (e.GEMINI_MODE === 'vertex' && e.VERTEX_PROJECT === undefined) {
     throw new ConfigError(['VERTEX_PROJECT: required when GEMINI_MODE=vertex']);
   }
+  if (e.OPENAI_PII_EU_HOSTS.some((h) => US_OPENAI_HOSTS.has(h))) {
+    throw new ConfigError([
+      'OPENAI_PII_EU_HOSTS: the default (US) OpenAI endpoint can never carry applicant data',
+    ]);
+  }
+  const baseHost =
+    e.OPENAI_BASE_URL === undefined ? undefined : new URL(e.OPENAI_BASE_URL).hostname.toLowerCase();
   return {
     mode: 'live',
-    openai: { baseURL: e.OPENAI_BASE_URL, piiApproved: e.OPENAI_PII_APPROVED === 'true' },
+    openai: {
+      baseURL: e.OPENAI_BASE_URL,
+      piiApproved: baseHost !== undefined && e.OPENAI_PII_EU_HOSTS.includes(baseHost),
+    },
     gemini:
       e.GEMINI_MODE === 'vertex' && e.VERTEX_PROJECT !== undefined
         ? { mode: 'vertex', project: e.VERTEX_PROJECT, location: e.VERTEX_LOCATION }

@@ -115,16 +115,23 @@ async function main(): Promise<void> {
         ['city', 'PL-WARSAW'],
         ['dorms', 'wut'],
       ];
+      // LOW-7: p95 over 20 reads per card
       for (const [kind, id] of wanted) {
         const key = `wiki:card:${kind}:${id}:${SEASON}`;
-        const t = performance.now();
-        const raw = await valkey.get(key);
-        const ms = performance.now() - t;
+        const samples: number[] = [];
+        let raw: string | undefined;
+        for (let i = 0; i < 20; i += 1) {
+          const t = performance.now();
+          raw = await valkey.get(key);
+          samples.push(performance.now() - t);
+        }
         if (raw === undefined) throw new StepFailed(`missing ${key}`);
         const card = SliceCard.parse(JSON.parse(raw));
-        if (card.est_tokens > 350 || ms >= 5)
-          throw new StepFailed(`${key}: ${card.est_tokens} tokens, ${ms.toFixed(2)} ms`);
-        log(`  ${key}: ${card.est_tokens} tokens, ${ms.toFixed(2)} ms`);
+        samples.sort((a, b) => a - b);
+        const p95 = samples[Math.floor(samples.length * 0.95)] ?? Infinity;
+        if (card.est_tokens > 350 || p95 >= 5)
+          throw new StepFailed(`${key}: ${card.est_tokens} tokens, p95 ${p95.toFixed(2)} ms`);
+        log(`  ${key}: ${card.est_tokens} tokens, p95 ${p95.toFixed(2)} ms over 20 reads`);
       }
     } finally {
       await valkey.close();

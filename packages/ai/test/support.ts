@@ -21,10 +21,12 @@ export class MemoryEconomics implements EconomicsPort {
     return Promise.resolve(true);
   }
 
-  settle(callKey: string, reservedUsd: number, actualUsd: number): Promise<void> {
+  settle(callKey: string, reservedUsd: number, actualUsd: number): Promise<{ overCapUsd: number }> {
     const b = this.budgets.get(callKey);
-    if (b) b.reserved = Math.min(b.cap, Math.max(0, b.reserved - reservedUsd + actualUsd));
-    return Promise.resolve();
+    if (!b) return Promise.resolve({ overCapUsd: 0 });
+    const total = Math.max(0, b.reserved - reservedUsd + actualUsd);
+    b.reserved = Math.min(b.cap, total);
+    return Promise.resolve({ overCapUsd: Math.max(0, total - b.cap) });
   }
 
   record(usage: UsageRecord): Promise<void> {

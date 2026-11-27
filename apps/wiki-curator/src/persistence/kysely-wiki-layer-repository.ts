@@ -655,6 +655,8 @@ class KyselyLayerStore implements WikiLayerStore {
         wiki_status: w.wikiStatus,
         citations: w.citations,
         slot_completeness: w.slotCompleteness,
+        evidence_basis: w.evidenceBasis,
+        ruling_covered_paths: w.rulingCoveredPaths ?? [],
       },
       w.reason,
     );

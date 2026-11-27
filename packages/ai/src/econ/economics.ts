@@ -29,8 +29,11 @@ export interface UsageRecord {
 export interface EconomicsPort {
   /** Atomically reserves `amountUsd` under `callKey` (created with `capUsd` on first use). */
   reserve(callKey: string, route: RouteId, capUsd: number, amountUsd: number): Promise<boolean>;
-  /** Replaces a reservation by the metered cost (clamped so the total never exceeds the cap). */
-  settle(callKey: string, reservedUsd: number, actualUsd: number): Promise<void>;
+  /**
+   * Replaces a reservation by the metered cost. The budget row stays within its CHECK (reserved <= cap), so
+   * spend beyond the cap is RETURNED as `overCapUsd` (never silently absorbed); the ledger keeps the true cost.
+   */
+  settle(callKey: string, reservedUsd: number, actualUsd: number): Promise<{ readonly overCapUsd: number }>;
   /** Appends one ledger row; idempotent on `idempotencyKey` (a replayed workflow step never double-counts). */
   record(usage: UsageRecord): Promise<void>;
 }

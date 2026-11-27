@@ -264,4 +264,36 @@ describe('[T2-G7] $0 matching as app_core (SQL catalog + L2 pg_trgm + HTTP dev e
     expect(mine).toEqual([ids.active, ids.baseline].sort());
     expect((await buildApp(core).request('/api/v1/wiki/programs?season=bad')).status).toBe(400);
   });
+
+  it('LOW-5: the body cap holds for a chunked (no Content-Length) upload, and dev routes do not exist unless enabled', async () => {
+    const app = buildApp(core);
+    const big = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 10; i += 1) controller.enqueue(new Uint8Array(16 * 1024).fill(0x20));
+        controller.close();
+      },
+    });
+    const res = await app.request('/api/v1/dev/match', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: big,
+      duplex: 'half',
+    });
+    expect(res.status).toBe(413);
+    const prod = buildApp({ ...core, devEndpoints: false });
+    expect((await prod.request('/api/v1/dev/match', { method: 'POST', body: '{}' })).status).toBe(404);
+    expect((await prod.request('/healthz')).status).toBe(200);
+  });
+
+  it('MEDIUM-4: a QUARANTINED city drops out of the read model and the minor is flagged MINOR_CONSENTS_UNVERIFIED', async () => {
+    await writer
+      .updateTable('wiki.city_profile')
+      .set({ verification_depth: 'QUARANTINED' })
+      .where('id', '=', city)
+      .execute();
+    const result = await core.matching.match(profile, { asOf: new Date('2027-05-10T12:00:00Z') });
+    const m = result.matches.find((x) => x.programId === ids.active);
+    expect(m?.flags.map((f) => f.code)).toContain('MINOR_CONSENTS_UNVERIFIED');
+    expect(m?.fitTier).toBe('CONDITIONAL');
+  });
 });

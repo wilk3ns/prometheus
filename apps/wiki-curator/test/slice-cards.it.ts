@@ -6,6 +6,8 @@ import { openRuntime, openWikiServices, type CuratorRuntime, type WikiServices }
 import { GoldenNodeInvalidError, importGolden, PendingRulingsError } from '../src/curator/golden-importer.js';
 import type { GoldenNode, GoldenPlan } from '../src/curator/golden-mapping.js';
 import { goodFields } from './support/curator-scenarios.js';
+import { LAYERS } from '../src/curator/layers.js';
+import { pathsOverlap } from '../src/curator/paths.js';
 
 /**
  * [T2-G6] Slice Card <350-token invariant + Valkey latency, via the golden importer pipeline on a SYNTHETIC
@@ -20,8 +22,26 @@ const cite = (path: string, host: string): Citation => ({
   retrieved_at: '2026-11-26T16:18:00Z',
 });
 
+/** Synthetic plans state their uncovered required paths explicitly, as the real mapping module must (P1). */
+function withSyntheticRulings(n: GoldenNode): GoldenNode {
+  const uncited = LAYERS[n.layer].requiredPaths.filter(
+    (p) => !n.citations.some((c) => pathsOverlap(c.field_path, p)),
+  );
+  return { ...n, rulingCovered: uncited.map((path) => ({ path, ruling: 'synthetic test fixture ruling' })) };
+}
+
 function universityPlan(uni: string, cityId: string, host: string): GoldenNode[] {
-  const deep = { depth: 'DEEP_VERIFIED' as const, score: 0.97, slots: {}, wikiStatus: null };
+  return rawUniversityPlan(uni, cityId, host).map(withSyntheticRulings);
+}
+
+function rawUniversityPlan(uni: string, cityId: string, host: string): GoldenNode[] {
+  const deep = {
+    depth: 'DEEP_VERIFIED' as const,
+    score: 0.97,
+    slots: {},
+    wikiStatus: null,
+    rulingCovered: [],
+  };
   const huge = Object.fromEntries(
     Array.from({ length: 300 }, (_, i) => [`fact_${i}`, `value ${i} `.repeat(8)]),
   );
@@ -225,5 +245,87 @@ describe('[T2-G6] Slice Cards: 8 cards <= 350 tokens in PG and Valkey (< 5 ms re
     await expect(importGolden({ ...services, clock: runtime.clock }, bad)).rejects.toBeInstanceOf(
       GoldenNodeInvalidError,
     );
+  });
+
+  it('P1 golden provenance: an uncited required path without a ruling entry fails the import loudly', async () => {
+    const nodes = universityPlan('cardse', 'PL-CARDSE', 'pw.edu.pl').map((n) =>
+      n.layer === 'UNIVERSITY' ? { ...n, rulingCovered: n.rulingCovered.slice(1) } : n,
+    );
+    await expect(importGolden({ ...services, clock: runtime.clock }, { ...plan, nodes })).rejects.toThrow(
+      /uncited required path\(s\) not covered by a ruling/,
+    );
+  });
+
+  it('golden revisions record evidence_basis ARCHITECT_RULING + the ruling-covered paths', async () => {
+    const rev = await runtime.db
+      .selectFrom('wiki.node_revision')
+      .select('after_json')
+      .where('node_key', '=', 'cardsa')
+      .executeTakeFirstOrThrow();
+    expect(rev.after_json).toMatchObject({
+      evidence_basis: 'ARCHITECT_RULING',
+      ruling_covered_paths: expect.any(Array),
+    });
+  });
+
+  it('MEDIUM-4: quarantining a university invalidates every dependent card (docs of its programmes, tuition_aid, dorms)', async () => {
+    const store = services.layers;
+    const uni = await store.findNode('UNIVERSITY', 'cardsa');
+    if (!uni) throw new Error('cardsa missing');
+    const result = await store.transaction(async (tx) => {
+      await tx.quarantineNode({
+        layer: 'UNIVERSITY',
+        nodeKey: 'cardsa',
+        expectedVersion: uni.version,
+        actor: 'HUMAN',
+        reason: 'it',
+        evidence: {},
+      });
+      return services.materializer.materialize(tx, 'UNIVERSITY', 'cardsa', SEASON);
+    });
+    await services.cards.publish(result);
+    expect(result.evict.map((e) => `${e.kind}:${e.nodeId}`).sort()).toEqual([
+      'docs:cardsa:bsc-cs',
+      'dorms:cardsa',
+      'tuition_aid:cardsa',
+    ]);
+    const spec = await runtime.db
+      .selectFrom('wiki.program_season_spec')
+      .select('agent_slice_card_json')
+      .where('program_id', '=', 'cardsa:bsc-cs')
+      .executeTakeFirstOrThrow();
+    expect(spec.agent_slice_card_json).toBeNull();
+    const dorm = await runtime.db
+      .selectFrom('wiki.university_housing')
+      .select('agent_slice_card_json')
+      .where('university_id', '=', 'cardsa')
+      .executeTakeFirstOrThrow();
+    expect(dorm.agent_slice_card_json).toBeNull();
+    for (const ref of result.evict) expect(await services.cards.get(ref)).toBeUndefined();
+  });
+
+  it('MEDIUM-4: quarantining a programme recompiles its university tuition_aid card without it', async () => {
+    const store = services.layers;
+    const spec = await store.findNode('PROGRAM_SPEC', `cardsb:bsc-cs:${SEASON}`);
+    if (!spec) throw new Error('cardsb spec missing');
+    const before = await services.cards.get({ kind: 'tuition_aid', nodeId: 'cardsb', season: SEASON });
+    expect(before?.text).toContain('Computer Science: EUR');
+    const result = await store.transaction(async (tx) => {
+      await tx.quarantineNode({
+        layer: 'PROGRAM_SPEC',
+        nodeKey: `cardsb:bsc-cs:${SEASON}`,
+        expectedVersion: spec.version,
+        actor: 'HUMAN',
+        reason: 'it',
+        evidence: {},
+      });
+      return services.materializer.materialize(tx, 'PROGRAM_SPEC', `cardsb:bsc-cs:${SEASON}`, SEASON);
+    });
+    await services.cards.publish(result);
+    const after = await services.cards.get({ kind: 'tuition_aid', nodeId: 'cardsb', season: SEASON });
+    expect(after?.text).not.toContain('Computer Science: EUR');
+    expect(
+      await services.cards.get({ kind: 'docs', nodeId: 'cardsb:bsc-cs', season: SEASON }),
+    ).toBeUndefined();
   });
 });

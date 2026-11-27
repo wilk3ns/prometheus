@@ -55,3 +55,8 @@ export function sameValue(a: unknown, b: unknown): boolean {
   if (a === undefined || b === undefined) return a === b;
   return canonicalJson(a) === canonicalJson(b);
 }
+
+/** True when `a` and `b` are the same path or one is an ancestor of the other (`program` / `program.name_en`). */
+export function pathsOverlap(a: string, b: string): boolean {
+  return a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`);
+}

@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { Citation } from '@prometheus/contracts';
 import { loadCacheConfig, loadWikiCuratorConfig } from '@prometheus/config';
 import {
   openDurableCurator,
@@ -50,6 +52,7 @@ describe('[T2-G5] WF-03 WikiDeepVerify: publish gate + seeded-error quarantine',
       actor: 'HUMAN' as const,
       reason: 'curator-verify.it context',
       verifiedAt: new Date(),
+      evidenceBasis: 'VERIFIED_CITATIONS' as const,
     };
     const locked = SCENARIOS.locked;
     if (locked.existing === undefined) throw new Error('locked scenario needs an existing node');
@@ -128,7 +131,14 @@ describe('[T2-G5] WF-03 WikiDeepVerify: publish gate + seeded-error quarantine',
       tuition_annual_eur: 6000,
     });
     expect(Number(row.verification_score)).toBeCloseTo(0.97, 3);
-    expect(row.citations_json).toHaveLength(4);
+    // P1: one validator-passing citation per required path, retrieved_at taken from the snapshot (LOW-3)
+    expect(row.citations_json).toHaveLength(8);
+    expect(
+      z
+        .array(Citation)
+        .parse(row.citations_json)
+        .every((c) => c.retrieved_at === s.fetchedAt.toISOString()),
+    ).toBe(true);
     const revisions = await runtime.db
       .selectFrom('wiki.node_revision')
       .selectAll()
@@ -211,8 +221,95 @@ describe('[T2-G5] WF-03 WikiDeepVerify: publish gate + seeded-error quarantine',
     expect(row.locked_fields_json).toEqual(['tuition_annual_eur']);
   });
 
+  it('P2: a WF-03 re-run on a QUARANTINED node keeps it quarantined and spends nothing', async () => {
+    const s = SCENARIOS.euvsnoneu;
+    const before = (await ledger(s, 1)).length;
+    const result = await durable.workflows.verify(targetOf(s), 1);
+    expect(result).toMatchObject({ status: 'KEPT_QUARANTINED', agentA: null, costUsd: 0 });
+    expect((await ledger(s, 1)).length).toBe(before);
+    expect(await spec(s.programId)).toMatchObject({
+      verification_depth: 'QUARANTINED',
+      wiki_status: 'DRAFT',
+    });
+  });
+
   it('a stale version starts no work (single-flight is per node version)', async () => {
     const result = await durable.workflows.verify(targetOf(SCENARIOS.locked), 0);
     expect(result).toMatchObject({ status: 'ABORTED', abortReason: expect.stringContaining('version 2') });
+  });
+
+  describe('[T2-G5] WF-19 SeasonalBaselineBuild: P1 evidence bar, target-bound identity, sticky quarantine', () => {
+    const spec19 = (sc: Scenario) => ({
+      targetKey: sc.targetKey,
+      layer: sc.layer,
+      nodeKey: sc.nodeKey,
+      countryIso2: sc.countryIso2,
+    });
+
+    it('every required path cited -> BASELINE + ACTIVE (matchable)', async () => {
+      const r = await durable.workflows.baseline(SEASON, 'it-baseok', [spec19(SCENARIOS.baseok)]);
+      expect(r.targets[0]).toMatchObject({ status: 'BASELINE', validatorErrors: [] });
+      expect(await spec(SCENARIOS.baseok.programId)).toMatchObject({
+        verification_depth: 'BASELINE',
+        wiki_status: 'ACTIVE',
+      });
+    });
+
+    it('reviewer probe: tuition 0 + one unrelated quote + parent-path abstain -> REQUIRED_PATH_UNCITED, never ACTIVE', async () => {
+      const r = await durable.workflows.baseline(SEASON, 'it-baseabstain', [spec19(SCENARIOS.baseabstain)]);
+      const t = r.targets[0];
+      expect(t?.status).toBe('QUARANTINED');
+      expect(t?.validatorErrors.filter((e) => e.code === 'REQUIRED_PATH_UNCITED').map((e) => e.path)).toEqual(
+        expect.arrayContaining(['tuition_annual_eur', 'app_window_close_at', 'program.degree_level']),
+      );
+      expect(t?.gate?.abstainedRequired).toEqual(['program.degree_level', 'program.instruction_language']);
+      expect(await spec(SCENARIOS.baseabstain.programId)).toMatchObject({
+        verification_depth: 'QUARANTINED',
+        wiki_status: 'DRAFT',
+      });
+    });
+
+    it('reviewer probe: a foreign `PL:**:**:IB` proposal on an IT origin target is rejected and writes NO row', async () => {
+      const sc = SCENARIOS.foreignorigin;
+      const r = await durable.workflows.baseline(SEASON, 'it-foreign', [spec19(sc)]);
+      const t = r.targets[0];
+      expect(t?.status).toBe('REJECTED_IDENTITY');
+      expect(t?.validatorErrors.map((e) => e.code)).toEqual(
+        expect.arrayContaining(['NODE_KEY_MISMATCH', 'IDENTITY_MISMATCH', 'WILDCARD_FROM_MODEL']),
+      );
+      const rows = await runtime.db
+        .selectFrom('wiki.origin_equivalency_rule')
+        .select('id')
+        .where((eb) =>
+          eb.or([eb('citizenship_country', '=', '**'), eb('destination_country_iso2', '=', 'IT')]),
+        )
+        .execute();
+      expect(rows).toEqual([]);
+      const revisions = await runtime.db
+        .selectFrom('wiki.node_revision')
+        .select(['node_key', 'version'])
+        .where('node_key', '=', sc.nodeKey)
+        .execute();
+      expect(revisions).toEqual([{ node_key: sc.nodeKey, version: 0 }]); // evidence of the rejection only
+    });
+
+    it('an unbound non-PROGRAM target is skipped: a model never chooses which node it writes', async () => {
+      const r = await durable.workflows.baseline(SEASON, 'it-unbound', [
+        { ...spec19(SCENARIOS.foreignorigin), nodeKey: null },
+      ]);
+      expect(r.targets[0]).toMatchObject({ status: 'UNBOUND_TARGET' });
+    });
+
+    it('P2: WF-19 never re-activates a node WF-03 quarantined (no extraction either)', async () => {
+      const r = await durable.workflows.baseline(SEASON, 'it-sticky', [
+        spec19(SCENARIOS.euvsnoneu),
+        spec19(SCENARIOS.good),
+      ]);
+      expect(r.targets.map((t) => t.status)).toEqual(['KEPT_QUARANTINED', 'KEPT_DEEP_VERIFIED']);
+      expect(await spec(SCENARIOS.euvsnoneu.programId)).toMatchObject({
+        verification_depth: 'QUARANTINED',
+        wiki_status: 'DRAFT',
+      });
+    });
   });
 });

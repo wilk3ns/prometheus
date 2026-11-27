@@ -13,8 +13,11 @@ import { randomBytes } from 'node:crypto';
  */
 
 export interface UntrustedDocument {
-  /** `web` / `pdf`: crawled official sources; `user`: applicant free text (e.g. matching preferences). */
-  readonly kind: 'web' | 'pdf' | 'user';
+  /**
+   * `web` / `pdf`: crawled official sources; `user`: applicant free text (e.g. matching preferences);
+   * `model`: another model's output (Agent A's proposal for Agent B, validator / verifier feedback for Agent A).
+   */
+  readonly kind: 'web' | 'pdf' | 'user' | 'model';
   readonly url: string;
   readonly text: string;
 }
@@ -26,16 +29,21 @@ export const cryptoNonce: NonceSource = () => randomBytes(16).toString('hex');
 
 const FENCE = /<(\/?)(untrusted)/gi;
 
-/** True for code units removed from untrusted text: BiDi controls and C0/DEL except \n and \t. */
+/** True for code units removed from untrusted text: C0 / DEL (except \n, \t) and C1 controls. */
 function isStripped(code: number): boolean {
-  if (code >= 0x202a && code <= 0x202e) return true;
-  if (code >= 0x2066 && code <= 0x2069) return true;
   if (code === 0x0a || code === 0x09) return false;
-  return code <= 0x1f || code === 0x7f;
+  return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
 }
 
+/**
+ * LOW-1: every Unicode format character (category Cf: BiDi overrides / isolates / marks incl. U+061C,
+ * U+200E/F, zero-width U+200B-D, U+2060, U+FEFF, soft hyphen ...) is removed BEFORE the fence escape, so an
+ * invisible character can never split `</untrusted` past the escape.
+ */
+const FORMAT_CHARS = /\p{Cf}/gu;
+
 export function sanitizeUntrusted(text: string): string {
-  const normalised = text.replace(/\r\n?/g, '\n');
+  const normalised = text.replace(/\r\n?/g, '\n').replace(FORMAT_CHARS, '');
   let out = '';
   for (let i = 0; i < normalised.length; i += 1) {
     const code = normalised.charCodeAt(i);

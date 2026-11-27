@@ -77,6 +77,8 @@ export const ReasonCode = z.enum([
   'BUDGET_STRETCH',
   'GPA_STRETCH',
   'MINOR_UNDER_18_CONSENTS',
+  /** MEDIUM-4: a consent source (the city layer) is missing or QUARANTINED: the consent list is incomplete. */
+  'MINOR_CONSENTS_UNVERIFIED',
   'MINOR_AGE_VERIFY_ACADEMIC_CALENDAR',
   'RU_SECTOR_TRANSLATION_EXEMPT',
   'BANK_TRANSFER_ONLY',

@@ -126,10 +126,8 @@ export function resolveOriginRule(
     ),
   );
   if (exact !== undefined || !UNIVERSAL_DIPLOMAS.has(input.diplomaType)) return exact;
-  return (
-    index.get(originKey(destination, '**', input.diplomaCountry, input.diplomaType, input.targetSeason)) ??
-    index.get(originKey(destination, '**', '**', input.diplomaType, input.targetSeason))
-  );
+  // LOW-2: only the CITIZENSHIP may be universal (ENG-T2 §5.2); the diploma country always matches exactly
+  return index.get(originKey(destination, '**', input.diplomaCountry, input.diplomaType, input.targetSeason));
 }
 
 function withinWindow(examDate: string | undefined, from: string | null, until: string | null): boolean {
@@ -278,6 +276,8 @@ export function evaluateCandidate(
         aggregateConsents(origin?.minorConsents, c.university.minorConsents, c.city?.minorConsents),
       ),
     );
+    // MEDIUM-4: a missing or QUARANTINED city is a missing consent source: fail closed, never a short list
+    if (c.city === null) flags.push(flag('MINOR_CONSENTS_UNVERIFIED', 'CONDITIONAL', ['CITY']));
   }
   if (
     spec.classes_start_date === null &&

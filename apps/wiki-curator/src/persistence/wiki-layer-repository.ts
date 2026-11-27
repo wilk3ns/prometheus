@@ -48,6 +48,13 @@ export interface NodeWrite<L extends WikiLayer = WikiLayer> {
   readonly actor: RevisionActor;
   readonly reason: string;
   readonly verifiedAt: Date;
+  /**
+   * Provenance of the evidence (P1, recorded in the revision): `VERIFIED_CITATIONS` for AI-curated nodes
+   * (every required path cited and validated), `ARCHITECT_RULING` for golden-fixture nodes.
+   */
+  readonly evidenceBasis: 'VERIFIED_CITATIONS' | 'ARCHITECT_RULING';
+  /** Golden only: required paths not carried by a citation, each with the ruling that covers it. */
+  readonly rulingCoveredPaths?: ReadonlyArray<{ readonly path: string; readonly ruling: string }>;
 }
 
 export interface QuarantineWrite {

@@ -42,14 +42,29 @@ describe('[T2-G7] L1 hard exclusions (ENG-T2 §5.2.1)', () => {
   });
 
   it("IB / A_LEVEL fall back to a citizenship '**' rule; other diplomas never do", () => {
-    const universal = origin({ citizenshipCountry: '**', diplomaOriginCountry: '**', diplomaType: 'IB' });
+    // LOW-2: only the citizenship is a wildcard; the diploma country must match exactly
+    const universal = origin({ citizenshipCountry: '**', diplomaOriginCountry: 'UZ', diplomaType: 'IB' });
     expect(
       one(
-        applicant({ diplomaType: 'IB', citizenshipCountry: 'UZ', diplomaCountry: 'UZ' }),
+        applicant({ diplomaType: 'IB', citizenshipCountry: 'KZ', diplomaCountry: 'UZ' }),
         [candidate('u:p')],
         [universal],
       ).matches,
     ).toHaveLength(1);
+    const doubleWildcard = origin({
+      citizenshipCountry: '**',
+      diplomaOriginCountry: '**',
+      diplomaType: 'IB',
+    });
+    expect(
+      excluded(
+        one(
+          applicant({ diplomaType: 'IB', citizenshipCountry: 'UZ', diplomaCountry: 'UZ' }),
+          [candidate('u:p')],
+          [doubleWildcard],
+        ),
+      ),
+    ).toEqual(['ORIGIN_RULE_UNVERIFIED']);
     const wildcardAttestat = origin({ citizenshipCountry: '**', diplomaOriginCountry: '**' });
     expect(
       excluded(
@@ -277,6 +292,20 @@ describe('[T2-G7] L1 tiers and action flags (ENG-T2 §5.2.2)', () => {
     expect(codes(one(applicant({ dob: '2009-10-01' })))).not.toContain('MINOR_AGE_VERIFY_ACADEMIC_CALENDAR'); // published start date
     expect(isMinorOnDate('2009-10-01', '2027-09-30')).toBe(true);
     expect(isMinorOnDate('2009-10-01', '2027-10-01')).toBe(false);
+  });
+});
+
+describe('[T2-G7][MEDIUM-4] quarantine propagates fail-closed into matching', () => {
+  it('a minor whose city layer is missing / QUARANTINED gets MINOR_CONSENTS_UNVERIFIED (CONDITIONAL), never a short list', () => {
+    const noCity = candidate('u:p', { candidate: { city: null } });
+    const r = one(applicant({ dob: '2010-02-15' }), [noCity]);
+    expect(r.matches[0]?.fitTier).toBe('CONDITIONAL');
+    expect(r.matches[0]?.flags).toContainEqual({
+      code: 'MINOR_CONSENTS_UNVERIFIED',
+      effect: 'CONDITIONAL',
+      refs: ['CITY'],
+    });
+    expect(codes(one(applicant({ dob: '2000-01-01' }), [noCity]))).not.toContain('MINOR_CONSENTS_UNVERIFIED'); // adults unaffected
   });
 });
 

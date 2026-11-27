@@ -1,4 +1,5 @@
 import type { CallOutcome, DataClass, ModelFamily, ModelTier, RouteId } from '@prometheus/contracts';
+import { randomUUID } from 'node:crypto';
 import { canonicalJson, sha256Hex } from '@prometheus/kernel';
 import { z } from 'zod';
 import type { CassetteKeyMaterial, ModelAdapterPort } from './adapters/types.js';
@@ -72,6 +73,8 @@ export type ModelResult<T> =
       readonly value: T;
       readonly served: Served;
       readonly costUsd: number;
+      /** MEDIUM-1: spend beyond the call key's cap caused by this call (0 normally; > 0 is a breaker signal). */
+      readonly overCapUsd: number;
       readonly attempts: readonly AttemptRecord[];
     }
   | {
@@ -79,6 +82,7 @@ export type ModelResult<T> =
       readonly outcome: FailureOutcome;
       readonly detail: string;
       readonly costUsd: number;
+      readonly overCapUsd: number;
       readonly attempts: readonly AttemptRecord[];
     };
 
@@ -97,6 +101,8 @@ export interface ModelRouterDeps {
   readonly economics: EconomicsPort;
   readonly nonce?: NonceSource;
   readonly nowMs?: () => number;
+  /** Unique id per PHYSICAL attempt (ledger key suffix; MEDIUM-2). Defaults to a random UUID. */
+  readonly attemptId?: () => string;
 }
 
 /** Repair retries per candidate after a schema-invalid output (ENG-T2 §3 "repair retry"). */
@@ -166,10 +172,38 @@ function parseOutput<T>(
 export class ModelRouter {
   private readonly nonce: NonceSource;
   private readonly nowMs: () => number;
+  private readonly attemptId: () => string;
 
   constructor(private readonly deps: ModelRouterDeps) {
     this.nonce = deps.nonce ?? cryptoNonce;
     this.nowMs = deps.nowMs ?? Date.now;
+    this.attemptId = deps.attemptId ?? randomUUID;
+  }
+
+  /**
+   * Settles one attempt and surfaces overspend loudly (MEDIUM-1): the ledger keeps the true metered cost, the
+   * budget row stays within its CHECK, and any spend beyond the reservation or the cap is reported + logged.
+   */
+  private async settle(
+    callKey: string,
+    route: RouteSpec,
+    reservedUsd: number,
+    meteredUsd: number,
+  ): Promise<number> {
+    const { overCapUsd } = await this.deps.economics.settle(callKey, reservedUsd, meteredUsd);
+    if (overCapUsd > 0 || meteredUsd > reservedUsd) {
+      console.warn(
+        JSON.stringify({
+          event: 'AI_BUDGET_OVERSPEND',
+          callKey,
+          route: route.id,
+          reservedUsd,
+          meteredUsd,
+          overCapUsd,
+        }),
+      );
+    }
+    return overCapUsd;
   }
 
   private candidates(route: RouteSpec): TierSpec[] {
@@ -181,8 +215,8 @@ export class ModelRouter {
   async generate<T>(call: GenerateCall<T>): Promise<ModelResult<T>> {
     const route = ROUTES[call.route];
     const attempts: AttemptRecord[] = [];
-    let ledgerSeq = 0;
     let totalCost = 0;
+    let overCapUsd = 0;
     const prompt: LoadedPrompt | undefined =
       route.promptId === undefined ? undefined : loadPrompt(route.promptId);
     const callKey = call.callKey ?? call.idempotencyKey;
@@ -194,10 +228,10 @@ export class ModelRouter {
       detail: string,
       usage: { input: number; output: number; cost: number; latencyMs: number },
     ): Promise<void> => {
-      ledgerSeq += 1;
       attempts.push({ tier: spec.tier, family: spec.family, outcome, detail, costUsd: usage.cost });
       await this.deps.economics.record({
-        idempotencyKey: `${call.idempotencyKey}#${ledgerSeq}`,
+        // MEDIUM-2: one row per PHYSICAL attempt (a re-executed step is real spend and is never deduplicated)
+        idempotencyKey: `${call.idempotencyKey}#${this.attemptId()}`,
         callKey,
         subsystem: route.subsystem,
         route: route.id,
@@ -219,16 +253,23 @@ export class ModelRouter {
       outcome,
       detail,
       costUsd: totalCost,
+      overCapUsd,
       attempts,
     });
     const zero = { input: 0, output: 0, cost: 0, latencyMs: 0 };
+    // MEDIUM-2: route-level refusals are ledgered too (against the route's primary candidate)
+    const primary = CATALOG[route.primary];
+    const deny = async (detail: string): Promise<ModelResult<T>> => {
+      await record(primary, this.deps.adapters[primary.family], 'POLICY_DENIED', detail, zero);
+      return fail('POLICY_DENIED', detail);
+    };
 
-    if (prompt === undefined) return fail('POLICY_DENIED', `${route.id} is not a generation route`);
+    if (prompt === undefined) return deny(`${route.id} is not a generation route`);
     if (!route.allowedDataClasses.includes(call.dataClass)) {
-      return fail('POLICY_DENIED', `${call.dataClass} is not allowed on ${route.id}`);
+      return deny(`${call.dataClass} is not allowed on ${route.id}`);
     }
     if (route.requiresExcludeFamily && call.excludeFamily === undefined) {
-      return fail('POLICY_DENIED', `${route.id} requires excludeFamily (GR-AI-009)`);
+      return deny(`${route.id} requires excludeFamily (GR-AI-009)`);
     }
     assertVariables(prompt, call.vars);
 
@@ -263,7 +304,9 @@ export class ModelRouter {
           repair === null
             ? baseUser
             : `${baseUser}\n\nYOUR PREVIOUS OUTPUT FAILED SCHEMA VALIDATION: ${repair}\nReturn corrected JSON only.`;
-        const reservation = costUsd(spec, estimateTokens(system + user), route.maxOutputTokens);
+        // the structured-output JSON Schema is sent with the request and billed as input (MEDIUM-1)
+        const schemaText = JSON.stringify(jsonSchemaOf(call.schema));
+        const reservation = costUsd(spec, estimateTokens(system + user + schemaText), route.maxOutputTokens);
         if (!(await this.deps.economics.reserve(callKey, route.id, route.costCapUsd, reservation))) {
           await record(
             spec,
@@ -288,7 +331,7 @@ export class ModelRouter {
         const latencyMs = this.nowMs() - started;
         const metered =
           response.kind === 'OK' ? costUsd(spec, response.inputTokens, response.outputTokens) : 0;
-        await this.deps.economics.settle(callKey, reservation, metered);
+        overCapUsd += await this.settle(callKey, route, reservation, metered);
         totalCost += metered;
         const usage = {
           input: response.kind === 'OK' ? response.inputTokens : 0,
@@ -315,6 +358,7 @@ export class ModelRouter {
             value: parsed.value,
             served: { family: spec.family, tier: spec.tier, model: spec.model, provider: adapter.provider },
             costUsd: totalCost,
+            overCapUsd,
             attempts,
           };
         }
@@ -328,22 +372,11 @@ export class ModelRouter {
 
   async embed(call: EmbedCall): Promise<EmbedResult> {
     const route = ROUTES['RTE-matching.embed'];
-    if (!route.allowedDataClasses.includes(call.dataClass)) {
-      return { ok: false, outcome: 'POLICY_DENIED', detail: `${call.dataClass} not allowed on ${route.id}` };
-    }
     const spec = CATALOG[route.primary];
     const adapter = this.deps.adapters[spec.family];
-    if (call.dataClass === 'APPLICANT_PII' && !adapter.piiApproved) {
-      return {
-        ok: false,
-        outcome: 'POLICY_DENIED',
-        detail: `${adapter.provider} not approved for APPLICANT_PII`,
-      };
-    }
-    const reservation = costUsd(spec, estimateTokens(call.text), 0);
     const promptHash = sha256Hex(`embed:${spec.model}:${EMBEDDING_DIMENSIONS}`);
     const base = {
-      idempotencyKey: `${call.idempotencyKey}#1`,
+      idempotencyKey: `${call.idempotencyKey}#${this.attemptId()}`,
       callKey: call.idempotencyKey,
       subsystem: route.subsystem,
       route: route.id,
@@ -354,6 +387,23 @@ export class ModelRouter {
       promptVersion: '1',
       promptHash,
     } as const;
+    const denial = !route.allowedDataClasses.includes(call.dataClass)
+      ? `${call.dataClass} not allowed on ${route.id}`
+      : call.dataClass === 'APPLICANT_PII' && !adapter.piiApproved
+        ? `${adapter.provider} not approved for APPLICANT_PII`
+        : undefined;
+    if (denial !== undefined) {
+      await this.deps.economics.record({
+        ...base,
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedCostUsd: 0,
+        latencyMs: 0,
+        outcome: 'POLICY_DENIED',
+      });
+      return { ok: false, outcome: 'POLICY_DENIED', detail: denial };
+    }
+    const reservation = costUsd(spec, estimateTokens(call.text), 0);
     if (!(await this.deps.economics.reserve(call.idempotencyKey, route.id, route.costCapUsd, reservation))) {
       await this.deps.economics.record({
         ...base,
@@ -380,7 +430,7 @@ export class ModelRouter {
       },
     });
     const metered = response.kind === 'OK' ? costUsd(spec, response.inputTokens, 0) : 0;
-    await this.deps.economics.settle(call.idempotencyKey, reservation, metered);
+    await this.settle(call.idempotencyKey, route, reservation, metered);
     const usage = {
       ...base,
       inputTokens: response.kind === 'OK' ? response.inputTokens : 0,

@@ -1,13 +1,15 @@
 import type { ProposalCitation } from '@prometheus/contracts';
-import { getPath, hasPath, sameValue, withPath } from './paths.js';
+import { getPath, hasPath, pathsOverlap, sameValue, withPath } from './paths.js';
 
 /**
  * Deterministic post-validator (ENG-T2 §4 step 3). Pure code, ZERO model calls. A proposal passes only if:
- *  - its node key matches the node under verification;
+ *  - its node key matches the node bound to the crawl target, its identity paths equal the bound / stored
+ *    identity, and it carries no `**` wildcard (identity is never model-chosen; HIGH-2);
  *  - it carries at least one citation, and EVERY citation: (a) has an allowlisted source host, (b) points at a
  *    snapshot the pipeline actually gathered, whose URL is the cited URL, (c) addresses an existing field
  *    path, (d) has a normalised verbatim quote of >= 12 chars that occurs in that snapshot's clean text
- *    (EG-004 / GR-AI-007), and (e) was not "retrieved" in the future;
+ *    (EG-004 / GR-AI-007); `retrieved_at` is rewritten from the snapshot (LOW-3);
+ *  - every REQUIRED path is backed by at least one such citation (exact, ancestor or descendant; P1);
  *  - its date windows are ordered (open < close).
  * LOCKED_BY_HUMAN pins (GR-OPS-014) are applied here too: a pinned path keeps its stored value, and a
  * differing proposed value is reported as a lock conflict (not an error).
@@ -25,8 +27,13 @@ export type ValidationErrorCode =
   | 'CITATION_UNKNOWN_FIELD'
   | 'QUOTE_TOO_SHORT'
   | 'QUOTE_NOT_FOUND'
-  | 'RETRIEVED_IN_FUTURE'
-  | 'DATE_WINDOW_INVERTED';
+  | 'DATE_WINDOW_INVERTED'
+  /** P1: a required path is not backed by any validator-passing citation (exact, ancestor or descendant). */
+  | 'REQUIRED_PATH_UNCITED'
+  /** HIGH-2: the proposal's identity differs from the identity bound to the crawl target / stored node. */
+  | 'IDENTITY_MISMATCH'
+  /** HIGH-2: `**` (universal-diploma wildcard) is ops-only; a model may never emit it. */
+  | 'WILDCARD_FROM_MODEL';
 
 export interface ValidationError {
   readonly code: ValidationErrorCode;
@@ -46,6 +53,8 @@ export interface SourceSnapshotView {
   readonly finalUrl: string;
   /** Clean text from the snapshot store; `null` for error rows (404, timeouts, robots ...). */
   readonly cleanText: string | null;
+  /** `wiki.source_snapshot.fetched_at` (ISO): the ONLY source of a citation's `retrieved_at` (LOW-3). */
+  readonly retrievedAt: string;
 }
 
 export interface ProposalUnderValidation {
@@ -55,6 +64,7 @@ export interface ProposalUnderValidation {
 }
 
 export interface ValidationInput {
+  /** Node key bound to the crawl target (never taken from model output; HIGH-2). */
   readonly expectedNodeKey: string;
   readonly nodeKeyOf: (fields: Readonly<Record<string, unknown>>) => string;
   readonly proposal: ProposalUnderValidation;
@@ -63,11 +73,18 @@ export interface ValidationInput {
   readonly lockedPaths: readonly string[];
   /** Stored field values of the existing node (`undefined` for a new node). */
   readonly existingFields: Readonly<Record<string, unknown>> | undefined;
-  readonly now: Date;
+  /** Paths that must each be backed by a validator-passing citation (P1). */
+  readonly requiredPaths: readonly string[];
+  /** Identity paths bound to the target / stored node: each must equal its bound value (HIGH-2). */
+  readonly boundIdentity: Readonly<Record<string, unknown>>;
+  /** Paths that may never carry the `**` wildcard in model output (HIGH-2). */
+  readonly wildcardPaths: readonly string[];
 }
 
 export interface ValidationOutcome {
   readonly errors: readonly ValidationError[];
+  /** Citations that passed every check, with `retrieved_at` rewritten from their snapshot (LOW-3). */
+  readonly citations: readonly ProposalCitation[];
   /** Proposed fields with every LOCKED_BY_HUMAN path restored to its pinned value. */
   readonly effectiveFields: Record<string, unknown>;
   readonly lockConflicts: readonly LockConflict[];
@@ -149,9 +166,6 @@ function checkCitation(
   if (!hasPath(input.proposal.fields, c.field_path)) {
     errors.push({ code: 'CITATION_UNKNOWN_FIELD', path: at, detail: c.field_path });
   }
-  if (new Date(c.retrieved_at).getTime() > input.now.getTime()) {
-    errors.push({ code: 'RETRIEVED_IN_FUTURE', path: at, detail: c.retrieved_at });
-  }
   const quote = normalizeForQuote(c.verbatim_quote);
   if ([...quote].length < MIN_QUOTE_CHARS) {
     errors.push({ code: 'QUOTE_TOO_SHORT', path: at, detail: `${[...quote].length} < ${MIN_QUOTE_CHARS}` });
@@ -213,11 +227,45 @@ export function validateProposal(input: ValidationInput): ValidationOutcome {
       detail: `expected ${input.expectedNodeKey}, proposal ${proposal.node_key}, fields ${derivedKey}`,
     });
   }
+  for (const [path, bound] of Object.entries(input.boundIdentity)) {
+    if (bound === undefined) continue;
+    const proposed = getPath(proposal.fields, path);
+    if (!sameValue(proposed, bound)) {
+      errors.push({
+        code: 'IDENTITY_MISMATCH',
+        path,
+        detail: `bound ${JSON.stringify(bound)}, proposed ${JSON.stringify(proposed) ?? 'nothing'}`,
+      });
+    }
+  }
+  for (const path of input.wildcardPaths) {
+    if (getPath(proposal.fields, path) === '**') {
+      errors.push({ code: 'WILDCARD_FROM_MODEL', path, detail: "'**' is reserved for ops-configured rules" });
+    }
+  }
   if (proposal.citations.length === 0) {
     errors.push({ code: 'NO_CITATIONS', path: 'citations', detail: 'at least one citation is required' });
   }
   const normalizedTexts = new Map<string, string>();
-  proposal.citations.forEach((c, i) => errors.push(...checkCitation(c, i, input, normalizedTexts)));
+  const passing: ProposalCitation[] = [];
+  proposal.citations.forEach((c, i) => {
+    const citationErrors = checkCitation(c, i, input, normalizedTexts);
+    errors.push(...citationErrors);
+    const snapshot = input.snapshots.get(c.snapshot_id);
+    // LOW-3: retrieved_at is the snapshot's fetch time, never the model's claim
+    if (citationErrors.length === 0 && snapshot !== undefined)
+      passing.push({ ...c, retrieved_at: snapshot.retrievedAt });
+  });
+  // P1 / HIGH-1: each required path needs a citation that passed every check above
+  for (const path of input.requiredPaths) {
+    if (!passing.some((c) => pathsOverlap(c.field_path, path))) {
+      errors.push({
+        code: 'REQUIRED_PATH_UNCITED',
+        path,
+        detail: 'no validator-passing verbatim citation covers it',
+      });
+    }
+  }
 
   const open = getPath(proposal.fields, 'app_window_open_at');
   const close = getPath(proposal.fields, 'app_window_close_at');
@@ -226,5 +274,5 @@ export function validateProposal(input: ValidationInput): ValidationOutcome {
   }
 
   const locks = applyLocks(proposal.fields, input.lockedPaths, input.existingFields);
-  return { errors, effectiveFields: locks.effective, lockConflicts: locks.conflicts };
+  return { errors, citations: passing, effectiveFields: locks.effective, lockConflicts: locks.conflicts };
 }

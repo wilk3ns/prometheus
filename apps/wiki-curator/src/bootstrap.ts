@@ -132,7 +132,7 @@ export async function openDurableCurator(
   const pg = runtime.config.postgres;
   const password = encodeURIComponent(await runtime.secrets.getSecret('wiki_writer_db_password'));
   await launchDurable({
-    systemDatabaseUrl: `postgres://wiki_writer:${password}@${pg.host}:${pg.port}/${pg.database}?sslmode=disable`,
+    systemDatabaseUrl: `postgres://wiki_writer:${password}@${pg.host}:${pg.port}/${pg.database}?sslmode=${pg.sslmode}`,
   });
   return { workflows, close: () => shutdownDurable() };
 }

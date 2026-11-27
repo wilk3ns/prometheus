@@ -6,6 +6,7 @@ import type { WikiLayerRepository } from '../persistence/wiki-layer-repository.j
 import { openFixture } from './golden-fixture.js';
 import { planGoldenImport, type GoldenPlan, type PendingRuling } from './golden-mapping.js';
 import { LAYERS, parseFields } from './layers.js';
+import { pathsOverlap } from './paths.js';
 import { cardCacheKey } from './slice-cards.js';
 import type { Materializer, SliceCardCache } from './materializer.js';
 import { applyLocks, type LockConflict } from './validators.js';
@@ -84,6 +85,23 @@ export function assertImportable(plan: GoldenPlan): void {
       throw new GoldenNodeInvalidError(
         `${plan.file} ${node.layer}: node key ${key ?? '?'} != ${node.nodeKey}`,
       );
+    // P1 (golden provenance): each required path is cited or covered by an explicit Architect ruling
+    const uncited = descriptor.requiredPaths.filter(
+      (p) => !node.citations.some((c) => pathsOverlap(c.field_path, p)),
+    );
+    const covered = new Set(node.rulingCovered.map((r) => r.path));
+    const unruled = uncited.filter((p) => !covered.has(p));
+    if (unruled.length > 0) {
+      throw new GoldenNodeInvalidError(
+        `${plan.file} ${node.layer} ${node.nodeKey}: uncited required path(s) not covered by a ruling: ${unruled.join(', ')}`,
+      );
+    }
+    const stale = [...covered].filter((p) => !uncited.includes(p));
+    if (stale.length > 0) {
+      throw new GoldenNodeInvalidError(
+        `${plan.file} ${node.layer} ${node.nodeKey}: stale ruling entries (now cited or not required): ${stale.join(', ')}`,
+      );
+    }
     if (node.depth === 'DEEP_VERIFIED' && node.citations.length === 0) {
       throw new GoldenNodeInvalidError(
         `${plan.file} ${node.layer} ${node.nodeKey}: DEEP_VERIFIED without citations`,
@@ -148,6 +166,8 @@ export async function importGolden(deps: GoldenImportDeps, plan: GoldenPlan): Pr
         actor: 'GOLDEN_FIXTURE',
         reason: `golden import ${plan.compiledKey}`,
         verifiedAt: deps.clock.now(),
+        evidenceBasis: 'ARCHITECT_RULING',
+        rulingCoveredPaths: node.rulingCovered,
       });
       nodes.push({
         layer: node.layer,

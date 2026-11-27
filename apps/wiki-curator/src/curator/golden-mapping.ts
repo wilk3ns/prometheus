@@ -7,6 +7,7 @@ import {
   type WikiStatus,
 } from '@prometheus/contracts';
 import type { FixtureNode } from './golden-fixture.js';
+import { LAYERS } from './layers.js';
 
 /**
  * ============================================================================================================
@@ -53,6 +54,31 @@ export interface GoldenNode {
   readonly citations: readonly Citation[];
   readonly slots: SlotCompleteness;
   readonly wikiStatus: WikiStatus | null;
+  /**
+   * P1 (golden provenance): required paths NOT carried by a fixture citation, each with the Architect ruling
+   * that covers it. The importer fails on any uncited required path missing here (and on stale entries).
+   */
+  readonly rulingCovered: readonly RuledPath[];
+}
+
+export interface RuledPath {
+  readonly path: string;
+  readonly ruling: string;
+}
+
+/** Rulings that cover golden values without a verbatim citation on the node itself. */
+export const RULINGS = {
+  B3_PRIOR:
+    'COMM-ARCH-T2-RULINGS B3: accepted_prior_fields ruled and written into the fixture by the Architect',
+  B3_FIXTURE: 'COMM-ARCH-T2-RULINGS B1-B3: value written into the golden fixture by the Architect',
+  D_A: 'COMM-ARCH-T2-RULINGS D-a: NAWA statement policy = DIRECT_WITH_NATIONAL_STATEMENT',
+  D_F: 'COMM-ARCH-T2-RULINGS D-f: comparator inherits the university-wide B.Sc. rules (BASELINE + ACTIVE)',
+  D_N: 'D-n (accepted provisionally by the coordinator): PoliMi applies via its own Online Services',
+  GOLDEN: 'ENG-T2 §4 + B1: Architect-attested golden-record field (primary nodes import DEEP_VERIFIED)',
+} as const;
+
+function ruled(ruling: string, ...paths: string[]): RuledPath[] {
+  return paths.map((path) => ({ path, ruling }));
 }
 
 export interface GoldenPlan {
@@ -176,6 +202,7 @@ function mapPolimi(f: FixtureNode, file: string): GoldenNode[] {
     score,
     citations: l1.citations(pathMapper('rules_payload_json')), // B1
     slots: slots('COUNTRY'),
+    rulingCovered: [],
     wikiStatus: null,
   };
 
@@ -207,6 +234,7 @@ function mapPolimi(f: FixtureNode, file: string): GoldenNode[] {
     score,
     citations: l1b.citations(pathMapper('attributes_json')),
     slots: slots('CITY'),
+    rulingCovered: ruled(RULINGS.GOLDEN, 'city_name_en', 'minor_consents_json'),
     wikiStatus: null,
   };
 
@@ -244,6 +272,14 @@ function mapPolimi(f: FixtureNode, file: string): GoldenNode[] {
       }),
     ),
     slots: slots('ORIGIN_EQUIVALENCY'),
+    rulingCovered: ruled(
+      RULINGS.GOLDEN,
+      'equivalency_policy',
+      'national_recognition_lead_days',
+      'ru_sector_translation_exempt',
+      'e_apostille_accepted',
+      'minor_consents_json',
+    ),
     wikiStatus: null,
   };
 
@@ -272,6 +308,10 @@ function mapPolimi(f: FixtureNode, file: string): GoldenNode[] {
     score,
     citations: l3.citations(pathMapper('general_rules_json')),
     slots: slots('UNIVERSITY'),
+    rulingCovered: [
+      ...ruled(RULINGS.GOLDEN, 'institution_type', 'credit_card_accepted', 'minor_consents_json'),
+      ...ruled(RULINGS.D_N, 'primary_portal_type'),
+    ],
     wikiStatus: null,
   };
 
@@ -301,6 +341,7 @@ function mapPolimi(f: FixtureNode, file: string): GoldenNode[] {
       }),
     ),
     slots: slots('HOUSING'),
+    rulingCovered: ruled(RULINGS.GOLDEN, 'official_info_url', 'critical_rules_json'),
     wikiStatus: null,
   };
 
@@ -400,9 +441,21 @@ function mapPolimi(f: FixtureNode, file: string): GoldenNode[] {
         english_requirements: 'min_english_requirements_json',
         predicted_grades_accepted: 'predicted_grades_accepted',
         tuition_annual_eur: 'tuition_annual_eur',
+        // D-c: the final Non-EU call close is app_window_close_at
+        calls_non_eu_abroad: 'app_window_close_at',
       }),
     ),
     slots: slots('PROGRAM_SPEC'),
+    rulingCovered: [
+      ...ruled(RULINGS.B3_FIXTURE, 'scholarship_waiver_codes_json'),
+      ...ruled(RULINGS.B3_PRIOR, 'accepted_prior_fields_json'),
+      ...ruled(
+        RULINGS.GOLDEN,
+        'required_entrance_exams_json',
+        'program.degree_level',
+        'program.instruction_language',
+      ),
+    ],
     wikiStatus: 'ACTIVE',
   };
 
@@ -483,6 +536,7 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
     score,
     citations: l1.citations(pathMapper('rules_payload_json')),
     slots: slots('COUNTRY'),
+    rulingCovered: [],
     wikiStatus: null,
   };
 
@@ -515,6 +569,7 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
       }),
     ),
     slots: slots('CITY'),
+    rulingCovered: ruled(RULINGS.GOLDEN, 'city_name_en'),
     wikiStatus: null,
   };
 
@@ -559,6 +614,16 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
       }),
     ),
     slots: slots('ORIGIN_EQUIVALENCY'),
+    rulingCovered: [
+      ...ruled(RULINGS.D_A, 'equivalency_policy'),
+      ...ruled(
+        RULINGS.GOLDEN,
+        'national_recognition_lead_days',
+        'paper_apostille_accepted',
+        'e_apostille_accepted',
+        'minor_consents_json',
+      ),
+    ],
     wikiStatus: null,
   };
 
@@ -606,6 +671,7 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
       }),
     ),
     slots: slots('UNIVERSITY'),
+    rulingCovered: ruled(RULINGS.GOLDEN, 'institution_type', 'primary_portal_type'),
     wikiStatus: null,
   };
 
@@ -636,6 +702,7 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
       pathMapper('critical_rules_json', { warsaw_halls_2026_2027_pln_monthly: 'halls_json' }),
     ),
     slots: slots('HOUSING'),
+    rulingCovered: ruled(RULINGS.GOLDEN, 'official_info_url', 'non_refundable_on_visa_denial'),
     wikiStatus: null,
   };
 
@@ -744,6 +811,16 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
       }),
     ),
     slots: slots('PROGRAM_SPEC'),
+    rulingCovered: [
+      ...ruled(RULINGS.B3_FIXTURE, 'scholarship_waiver_codes_json'),
+      ...ruled(RULINGS.B3_PRIOR, 'accepted_prior_fields_json'),
+      ...ruled(
+        RULINGS.GOLDEN,
+        'required_entrance_exams_json',
+        'program.degree_level',
+        'program.instruction_language',
+      ),
+    ],
     wikiStatus: 'ACTIVE',
   };
 
@@ -785,6 +862,8 @@ function mapWut(f: FixtureNode, file: string): GoldenNode[] {
       score: null,
       citations: [],
       slots: {},
+      // D-f: no quotes exist for the comparators; every required value is ruled
+      rulingCovered: ruled(RULINGS.D_F, ...LAYERS.PROGRAM_SPEC.requiredPaths),
       wikiStatus: 'ACTIVE',
     };
   });

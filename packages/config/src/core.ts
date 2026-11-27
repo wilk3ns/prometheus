@@ -24,6 +24,8 @@ export interface CoreConfig {
   readonly secretsDir: string;
   readonly httpPort: number;
   readonly embeddings: boolean;
+  /** Dev/test endpoints (`/api/v1/dev/*`): local profile only (LOW-5). */
+  readonly devEndpoints: boolean;
 }
 
 export function loadCoreConfig(env: Readonly<Record<string, string | undefined>>): CoreConfig {
@@ -39,5 +41,6 @@ export function loadCoreConfig(env: Readonly<Record<string, string | undefined>>
     secretsDir: e.SECRETS_DIR,
     httpPort: e.CORE_HTTP_PORT,
     embeddings: e.MATCHING_EMBEDDINGS === 'on',
+    devEndpoints: e.INFRA_PROFILE === 'local',
   };
 }

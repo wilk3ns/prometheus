@@ -77,8 +77,7 @@ export class Materializer {
         return this.forProgram(store, nodeKey, season);
       case 'UNIVERSITY': {
         const uni = await store.findNode('UNIVERSITY', nodeKey);
-        if (!live(uni))
-          return { cards: [], evict: [{ kind: 'tuition_aid', nodeId: nodeKey, season }], searchTexts: [] };
+        if (!live(uni)) return this.invalidateUniversity(store, nodeKey, season);
         return { cards: [await this.tuitionAid(store, uni, season)], evict: [], searchTexts: [] };
       }
       case 'CITY': {
@@ -108,8 +107,14 @@ export class Materializer {
   ): Promise<MaterializeResult> {
     const spec = await store.findNode('PROGRAM_SPEC', nodeKey);
     const programId = nodeKey.slice(0, nodeKey.lastIndexOf(':'));
-    if (!live(spec))
-      return { cards: [], evict: [{ kind: 'docs', nodeId: programId, season }], searchTexts: [] };
+    const parentId = spec?.fields.program.university_id ?? programId.split(':')[0] ?? '';
+    if (!live(spec)) {
+      // MEDIUM-4: the docs card goes, and the university's tuition_aid card is recompiled without the programme
+      const uniId = parentId;
+      const uni = await store.findNode('UNIVERSITY', uniId);
+      const cards = live(uni) ? [await this.tuitionAid(store, uni, season)] : [];
+      return { cards, evict: [{ kind: 'docs', nodeId: programId, season }], searchTexts: [] };
+    }
     const uni = await store.findNode('UNIVERSITY', spec.fields.program.university_id);
     const city = live(uni) ? await store.findNode('CITY', uni.fields.city_id) : undefined;
     const cards: SliceCard[] = [];
@@ -130,6 +135,28 @@ export class Materializer {
     const text = programSearchText(spec, live(uni) ? uni : undefined, live(city) ? city : undefined);
     await store.upsertProgramSearchText(programId, text);
     return { cards, evict: [], searchTexts: [{ programId, text }] };
+  }
+
+  /**
+   * MEDIUM-4: a quarantined university invalidates every card that renders its facts: its tuition_aid and dorms
+   * cards and the docs card of each of its programmes (Postgres column cleared + Valkey eviction).
+   */
+  private async invalidateUniversity(
+    store: WikiLayerStore,
+    uniId: string,
+    season: string,
+  ): Promise<MaterializeResult> {
+    const evict: CardRef[] = [
+      { kind: 'tuition_aid', nodeId: uniId, season },
+      { kind: 'dorms', nodeId: uniId, season },
+    ];
+    for (const spec of await store.listSpecs(uniId, season)) {
+      await store.setCard({ kind: 'docs', rowId: spec.rowId }, null);
+      evict.push({ kind: 'docs', nodeId: spec.fields.program_id, season });
+    }
+    for (const housing of await store.listHousing(uniId))
+      await store.setCard({ kind: 'dorms', rowId: housing.rowId }, null);
+    return { cards: [], evict, searchTexts: [] };
   }
 
   private async tuitionAid(

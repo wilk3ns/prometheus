@@ -61,7 +61,8 @@ export default defineConfig({
         ...workspaceSources,
         test: {
           name: 'golden',
-          include: ['tests/e2e/test/**/*.golden.{test,it}.ts'],
+          // ENG-T2 §6 file names (matching-golden.it.ts) + golden unit tests; the vault is required for all of them
+          include: ['tests/e2e/test/**/*.{golden.test,it}.ts'],
           environment: 'node',
           globalSetup: ['./scripts/it-global-setup.mjs'],
           env: itEnv(),

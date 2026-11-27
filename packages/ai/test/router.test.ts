@@ -12,13 +12,7 @@ function verifyCall(excludeFamily?: 'openai-gpt' | 'google-gemini'): GenerateCal
     idempotencyKey: `t:${Math.random()}`,
     callKey: 'verify:PROGRAM_SPEC:x:run',
     ...(excludeFamily === undefined ? {} : { excludeFamily }),
-    vars: {
-      layer: 'PROGRAM_SPEC',
-      node_key: 'x:2027-FALL',
-      season: '2027-FALL',
-      required_paths: [],
-      proposal: {},
-    },
+    vars: { layer: 'PROGRAM_SPEC', node_key: 'x:2027-FALL', season: '2027-FALL', required_paths: [] },
     untrusted: [{ kind: 'web', url: 'https://www.polimi.it/a', text: 'official text' }],
     schema: VerificationReport,
     schemaName: 'verification_report',
@@ -171,5 +165,55 @@ describe('[T2-G4] router policy, repair, failover, budget', () => {
     expect(g.requests[0]?.system).toContain(`nonce="${nonces[0] ?? ''}"`);
     // the cassette key excludes the nonce, so replay stays deterministic
     expect(g.requests[0]?.cassette.inputHash).toBe(g.requests[1]?.cassette.inputHash);
+  });
+});
+
+describe('[T2-G4][MEDIUM-1/2] metering: overspend surfaced, every attempt and refusal ledgered', () => {
+  it('route-level refusals (data class, missing excludeFamily) write a POLICY_DENIED ledger row', async () => {
+    const { econ, router } = setup();
+    await router.generate(verifyCall());
+    await router.generate({ ...verifyCall('google-gemini'), dataClass: 'APPLICANT_PII' });
+    expect(econ.ledger.map((l) => `${l.route}:${l.outcome}`)).toEqual([
+      'RTE-wiki.deep_verify:POLICY_DENIED',
+      'RTE-wiki.deep_verify:POLICY_DENIED',
+    ]);
+  });
+
+  it('re-executing the same logical call (same idempotency key) records every physical attempt', async () => {
+    const { econ, router } = setup();
+    const call = { ...verifyCall('google-gemini'), idempotencyKey: 'wf-step:agent-b:1' };
+    await router.generate(call);
+    await router.generate(call); // e.g. a DBOS step re-executed after a crash mid-step
+    expect(econ.ledger.filter((l) => l.outcome === 'OK')).toHaveLength(2);
+  });
+
+  it('metered cost above the reservation and the cap is reported (overCapUsd > 0), never silently absorbed', async () => {
+    // a provider that bills far more than the worst-case reservation (e.g. unmetered thinking tokens)
+    const { econ, router } = setup(undefined, () => okJson(PASSING_REPORT, 400_000, 6_000));
+    const r = await router.generate(verifyCall('google-gemini'));
+    expect(r.ok).toBe(true);
+    expect(r.overCapUsd).toBeGreaterThan(0);
+    const spent = econ.ledger.reduce((sum, l) => sum + l.estimatedCostUsd, 0);
+    expect(spent).toBeGreaterThan(0.5); // the ledger keeps the true spend
+    expect(econ.budgets.get('verify:PROGRAM_SPEC:x:run')?.reserved).toBeLessThanOrEqual(0.5);
+  });
+
+  it('the reservation includes the structured-output schema', async () => {
+    let seen = 0;
+    const { econ, router } = setup(undefined, (req) => {
+      seen = JSON.stringify(req.jsonSchema).length;
+      return okJson(PASSING_REPORT, 1, 1);
+    });
+    const reserveSpy: number[] = [];
+    const reserve = econ.reserve.bind(econ);
+    econ.reserve = (k, rt, cap, amount) => {
+      reserveSpy.push(amount);
+      return reserve(k, rt, cap, amount);
+    };
+    await router.generate(verifyCall('google-gemini'));
+    expect(seen).toBeGreaterThan(100);
+    const req = (await import('../src/catalog.js')).CATALOG['oa.flagship'];
+    // at least the schema's own estimated tokens are priced into the reservation
+    expect(reserveSpy[0]).toBeGreaterThanOrEqual(((seen / 3) * req.inputUsdPer1M) / 1_000_000);
   });
 });

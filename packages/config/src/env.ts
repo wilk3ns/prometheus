@@ -13,6 +13,8 @@ const Common = {
   CRAWLER_USER_AGENT: z.string().min(1).default('PrometheusWikiCurator/0.1 (official-source snapshotter)'),
   PROMETHEUS_VAULT_DIR: AbsolutePath.optional(),
   LIVE_CRAWL: z.enum(['0', '1']).default('0'),
+  /** LOW-6: Postgres TLS mode for runtime connections built from a URL (DBOS). Default by profile below. */
+  PG_SSLMODE: z.enum(['disable', 'require', 'verify-full']).optional(),
 };
 
 const LocalEnv = z.object({
@@ -55,7 +57,13 @@ const AzureEnv = z.object({
 const Env = z.discriminatedUnion('INFRA_PROFILE', [LocalEnv, AzureEnv]);
 
 interface CommonConfig {
-  readonly postgres: { readonly host: string; readonly port: number; readonly database: string };
+  readonly postgres: {
+    readonly host: string;
+    readonly port: number;
+    readonly database: string;
+    /** `disable` is the default only for INFRA_PROFILE=local; every other profile defaults to `verify-full`. */
+    readonly sslmode: 'disable' | 'require' | 'verify-full';
+  };
   readonly crawler: {
     readonly userAgent: string;
     readonly allowLocalFixtureHosts: boolean;
@@ -97,7 +105,12 @@ export function loadWikiCuratorConfig(env: Readonly<Record<string, string | unde
   }
   const e = parsed.data;
   const common: CommonConfig = {
-    postgres: { host: e.PG_HOST, port: e.PG_PORT, database: e.PG_DATABASE },
+    postgres: {
+      host: e.PG_HOST,
+      port: e.PG_PORT,
+      database: e.PG_DATABASE,
+      sslmode: e.PG_SSLMODE ?? (e.INFRA_PROFILE === 'local' ? 'disable' : 'verify-full'),
+    },
     crawler: {
       userAgent: e.CRAWLER_USER_AGENT,
       allowLocalFixtureHosts: e.INFRA_PROFILE === 'local' ? e.ALLOW_LOCAL_FIXTURE_HOSTS : false,

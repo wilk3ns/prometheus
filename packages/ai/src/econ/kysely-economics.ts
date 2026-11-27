@@ -37,16 +37,26 @@ export class KyselyEconomics implements EconomicsPort {
     return reserved !== undefined;
   }
 
-  async settle(callKey: string, reservedUsd: number, actualUsd: number): Promise<void> {
+  async settle(
+    callKey: string,
+    reservedUsd: number,
+    actualUsd: number,
+  ): Promise<{ readonly overCapUsd: number }> {
     const reserved = usd6(reservedUsd);
     const actual = usd6(actualUsd);
-    await this.db
-      .updateTable('econ.call_budget')
-      .set({
-        reserved_usd: sql`LEAST(cap_usd, GREATEST(0, reserved_usd - ${reserved}::numeric + ${actual}::numeric))`,
-      })
-      .where('call_key', '=', callKey)
-      .execute();
+    // One statement under the row lock: compute the unclamped total, store min(total, cap), return the excess.
+    const { rows } = await sql<{ over_cap: string }>`
+      WITH prev AS (
+        SELECT call_key, reserved_usd, cap_usd FROM econ.call_budget WHERE call_key = ${callKey} FOR UPDATE
+      )
+      UPDATE econ.call_budget b
+         SET reserved_usd = LEAST(prev.cap_usd, GREATEST(0, prev.reserved_usd - ${reserved}::numeric + ${actual}::numeric))
+        FROM prev
+       WHERE b.call_key = prev.call_key
+   RETURNING GREATEST(0, prev.reserved_usd - ${reserved}::numeric + ${actual}::numeric - prev.cap_usd) AS over_cap`.execute(
+      this.db,
+    );
+    return { overCapUsd: Number(rows[0]?.over_cap ?? 0) };
   }
 
   async record(u: UsageRecord): Promise<void> {

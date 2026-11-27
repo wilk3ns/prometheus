@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { AdmissionSeason, ApplicantMatchInput, Iso2 } from '@prometheus/contracts';
 import type { MatchService, ProgramListingPort } from '../modules/matching/index.js';
@@ -21,12 +22,18 @@ const ProgramsQuery = z.strictObject({ season: AdmissionSeason, country: Iso2.op
 export interface AppDeps {
   readonly programs: ProgramListingPort;
   readonly matching: MatchService;
+  /** LOW-5: dev/test routes exist only when explicitly enabled (INFRA_PROFILE=local). */
+  readonly devEndpoints: boolean;
 }
 
 const MAX_BODY_BYTES = 64 * 1024;
 
 export function buildApp(deps: AppDeps): Hono {
   const app = new Hono();
+  app.onError((error, c) => {
+    console.error(error instanceof Error ? `${error.name}: ${error.message}` : error);
+    return c.json({ error: 'INTERNAL' }, 500);
+  });
 
   app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
@@ -36,9 +43,15 @@ export function buildApp(deps: AppDeps): Hono {
     return c.json({ programs: await deps.programs.listMatchable(parsed.data.season, parsed.data.country) });
   });
 
-  app.post('/api/v1/dev/match', async (c) => {
-    const length = Number(c.req.header('content-length') ?? '0');
-    if (length > MAX_BODY_BYTES) return c.json({ error: 'BODY_TOO_LARGE' }, 413);
+  if (!deps.devEndpoints) return app;
+
+  // LOW-5: the cap is enforced on the streamed body (chunked uploads included), not on Content-Length alone
+  const capped = bodyLimit({
+    maxSize: MAX_BODY_BYTES,
+    onError: (c) => c.json({ error: 'BODY_TOO_LARGE' }, 413),
+  });
+
+  app.post('/api/v1/dev/match', capped, async (c) => {
     let body: unknown;
     try {
       body = await c.req.json();
@@ -54,9 +67,5 @@ export function buildApp(deps: AppDeps): Hono {
     return c.json(result);
   });
 
-  app.onError((error, c) => {
-    console.error(error instanceof Error ? `${error.name}: ${error.message}` : error);
-    return c.json({ error: 'INTERNAL' }, 500);
-  });
   return app;
 }

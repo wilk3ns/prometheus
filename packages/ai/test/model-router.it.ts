@@ -84,6 +84,21 @@ describe('[T2-G4] econ.call_budget atomic reservation on real Postgres', () => {
     expect(Number(row.reserved_usd)).toBeCloseTo(0.48, 6);
   });
 
+  it('MEDIUM-1: settling above the cap returns the excess (overCapUsd) instead of absorbing it silently', async () => {
+    const econ = new KyselyEconomics(writer, createUuidV7Generator(systemClock));
+    const callKey = `overspend:${randomUUID()}`;
+    expect(await econ.reserve(callKey, 'RTE-wiki.deep_extract', 0.5, 0.4)).toBe(true);
+    expect(await econ.settle(callKey, 0.4, 0.7)).toEqual({ overCapUsd: 0.2 });
+    const row = await writer
+      .selectFrom('econ.call_budget')
+      .select(['reserved_usd', 'cap_usd'])
+      .where('call_key', '=', callKey)
+      .executeTakeFirstOrThrow();
+    expect(Number(row.reserved_usd)).toBeCloseTo(0.5, 6); // the budget row stays within its CHECK ...
+    expect(await econ.reserve(callKey, 'RTE-wiki.deep_extract', 0.5, 0.000001)).toBe(false); // ... and is exhausted
+    expect(await econ.settle(callKey, 0, 0)).toEqual({ overCapUsd: 0 });
+  });
+
   it('the CHECK constraint is the backstop: a direct over-cap write fails 23514', async () => {
     const callKey = `check:${randomUUID()}`;
     await writer
@@ -112,7 +127,6 @@ describe('[T2-G4] econ.call_budget atomic reservation on real Postgres', () => {
         node_key: 'n',
         season: '2027-FALL',
         required_paths: ['a'],
-        proposal: {},
       },
       untrusted: [{ kind: 'web', url: 'https://www.pw.edu.pl/', text: 'x'.repeat(60_000) }],
       schema: VerificationReport,
@@ -156,7 +170,9 @@ describe('[T2-G4] econ.call_budget atomic reservation on real Postgres', () => {
     const okRows = ledger.filter((l) => l.outcome === 'OK');
     expect(okRows).toHaveLength(ok.length);
     const settled = okRows.reduce((s, l) => s + Number(l.estimated_cost_usd), 0);
+    // MEDIUM-1: this is the TRUE spend (no clamp anywhere on the ledger side), so the assertion can fail
     expect(settled).toBeLessThanOrEqual(0.5);
+    expect(results.every((r) => r.overCapUsd === 0)).toBe(true);
     expect(new Set(ledger.map((l) => l.family))).toEqual(new Set(['replay']));
     // deep_verify's primary is openai; the excluded gemini fallback is never used (GR-AI-009)
     expect(ledger.every((l) => l.model_or_sku.startsWith('replay:'))).toBe(true);

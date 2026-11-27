@@ -1,3 +1,4 @@
+import { DestinationCountry } from '@prometheus/contracts';
 import { blobRef } from '@prometheus/infra-ports';
 import { sha256Hex } from '@prometheus/kernel';
 import type { CuratorRuntime, WikiServices } from '../../src/bootstrap.js';
@@ -30,6 +31,7 @@ export async function seedScenarioContext(runtime: CuratorRuntime, services: Wik
     actor: 'HUMAN' as const,
     reason: 'synthetic WF-03 scenario context',
     verifiedAt: new Date(),
+    evidenceBasis: 'VERIFIED_CITATIONS' as const,
     depth: 'BASELINE' as const,
     wikiStatus: null,
   };
@@ -103,8 +105,8 @@ export async function seedScenarioSnapshot(runtime: CuratorRuntime, s: Scenario)
       {
         id: runtime.ids.next(),
         target_key: s.targetKey,
-        country_iso2: 'PL',
-        layer_hint: 'PROGRAM',
+        country_iso2: DestinationCountry.parse(s.countryIso2),
+        layer_hint: s.layer === 'PROGRAM_SPEC' ? 'PROGRAM' : s.layer,
         max_depth: 0,
         max_pages: 1,
         seed_urls: [s.url],

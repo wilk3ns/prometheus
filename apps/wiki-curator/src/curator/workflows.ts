@@ -1,14 +1,22 @@
 import { DBOS } from '@dbos-inc/dbos-sdk';
-import type { ModelFamily, ModelTier, SliceCard, WikiLayer, WikiNodeProposal } from '@prometheus/contracts';
+import type {
+  ModelFamily,
+  ModelTier,
+  SliceCard,
+  VerificationReport,
+  WikiLayer,
+  WikiNodeProposal,
+} from '@prometheus/contracts';
 import type { ModelResult } from '@prometheus/ai';
 import type { SliceCardCache } from './materializer.js';
 import {
+  baselineGateDecision,
   retryFeedback,
   type CommitOutcome,
   type CommitStatus,
   type DualPassCurator,
-  type ExistingView,
   type Gathered,
+  type NodeContext,
   type NodeTarget,
   type Validated,
 } from './pipeline.js';
@@ -19,16 +27,15 @@ import type { LockConflict, ValidationError } from './validators.js';
  * Durable workflows of the curator (ENG-T2 §4), on DBOS Transact:
  *  - WF-03 `WikiDeepVerify`: Agent A (deep_extract) -> deterministic validator -> Agent B (deep_verify, other
  *    family) -> publish gate -> one-transaction commit (+ materializer) -> Valkey cards. At most ONE targeted
- *    retry (Agent A re-run with the validator / verifier feedback); a second failure quarantines.
- *    Single-flight id `wiki-verify:${layer}:${nodeKey}:${season}:${version}`: concurrent requests for the same
- *    node version join one execution, and a completed id returns its recorded result.
- *  - WF-19 `SeasonalBaselineBuild`: per crawl target, baseline_extract -> validator -> BASELINE commit; never
- *    touches DEEP_VERIFIED nodes.
- * Every step is checkpointed, so a crash resumes after the last completed step (model calls are not repeated
- * once recorded, and ledger/budget writes are idempotent per step key).
+ *    retry (Agent A re-run with the fenced validator / verifier feedback); a second failure quarantines.
+ *    Single-flight id `wiki-verify:${layer}:${nodeKey}:${season}:${version}`.
+ *  - WF-19 `SeasonalBaselineBuild`: per crawl target with a BOUND node key, baseline_extract -> validator ->
+ *    deterministic gate (P1) -> BASELINE commit, or quarantine.
+ * Both workflows leave DEEP_VERIFIED (WF-19) and QUARANTINED (both, P2) nodes untouched, checked before any
+ * model spend. Every step is checkpointed, so a crash resumes after the last completed step.
  */
 
-export type VerifyStatus = CommitStatus | 'ABORTED';
+export type VerifyStatus = CommitStatus | 'ABORTED' | 'UNBOUND_TARGET';
 
 export interface VerifyResult {
   readonly workflowId: string;
@@ -51,6 +58,7 @@ export interface BaselineTargetResult {
   readonly nodeKey: string | null;
   readonly status: VerifyStatus;
   readonly validatorErrors: readonly ValidationError[];
+  readonly gate: GateDecision | null;
   readonly abortReason: string | null;
 }
 
@@ -63,11 +71,19 @@ export interface BaselineResult {
 export interface BaselineTargetSpec {
   readonly targetKey: string;
   readonly layer: WikiLayer;
-  /** Known up front for PROGRAM targets (`<program_id>:<season>`); otherwise taken from the proposal. */
+  /**
+   * Node key BOUND to the target (HIGH-2): `<program_id>:<season>` for PROGRAM targets, an ops-supplied key for
+   * other layers. `null` = unbound: the target is skipped (a model never chooses which node it writes).
+   */
   readonly nodeKey: string | null;
+  /** `crawl_target.country_iso2` */
+  readonly countryIso2: string;
 }
 
-export function verifyWorkflowId(target: NodeTarget, version: number): string {
+export function verifyWorkflowId(
+  target: Pick<NodeTarget, 'layer' | 'nodeKey' | 'season'>,
+  version: number,
+): string {
   return `wiki-verify:${target.layer}:${target.nodeKey}:${target.season}:${version}`;
 }
 
@@ -85,36 +101,35 @@ export interface CuratorWorkflows {
 export function registerCuratorWorkflows(curator: DualPassCurator, cards: SliceCardCache): CuratorWorkflows {
   const step = <T>(name: string, fn: () => Promise<T>): Promise<T> => DBOS.runStep(fn, { name });
 
-  const publishCards = (outcome: CommitOutcome): Promise<void> =>
-    step('cache-cards', () => cards.publish(outcome.materialized));
-
   const wf03 = DBOS.registerWorkflow(
     async (target: NodeTarget, expectedVersion: number): Promise<VerifyResult> => {
       const workflowId = verifyWorkflowId(target, expectedVersion);
       const callKey = `verify:${target.layer}:${target.nodeKey}:${workflowId}`;
-      const existing: ExistingView | null = await step('load-existing', () =>
-        curator.loadExisting(target.layer, target.nodeKey),
-      );
-      const version = existing?.version ?? 0;
+      const context: NodeContext = await step('load-context', () => curator.loadContext(target));
+      const version = context.existing?.version ?? 0;
       const noCards: SliceCard[] = [];
       const noConflicts: LockConflict[] = [];
-      const base = { workflowId, lockConflicts: noConflicts, cards: noCards };
-      if (version !== expectedVersion) {
-        // single-flight is per node version: a node that moved on needs a new workflow id
-        return {
-          ...base,
-          status: 'ABORTED',
-          version,
-          rounds: 0,
-          validatorErrors: [],
-          gate: null,
-          agentA: null,
-          agentB: null,
-          agentBCalls: 0,
-          costUsd: 0,
-          abortReason: `node is at version ${version}, not ${expectedVersion}`,
-        };
-      }
+      const idle = (status: VerifyStatus, abortReason: string | null): VerifyResult => ({
+        workflowId,
+        lockConflicts: noConflicts,
+        cards: noCards,
+        status,
+        version,
+        rounds: 0,
+        validatorErrors: [],
+        gate: null,
+        agentA: null,
+        agentB: null,
+        agentBCalls: 0,
+        costUsd: 0,
+        abortReason,
+      });
+      // single-flight is per node version: a node that moved on needs a new workflow id
+      if (version !== expectedVersion)
+        return idle('ABORTED', `node is at version ${version}, not ${expectedVersion}`);
+      // P2: quarantine is sticky; only a human / ops action clears it (no model spend)
+      if (context.existing?.depth === 'QUARANTINED') return idle('KEPT_QUARANTINED', null);
+
       const gathered: Gathered = await step('gather', () => curator.gather(target.targetKey, workflowId));
       let feedback: string | null = null;
       let cost = 0;
@@ -132,29 +147,24 @@ export function registerCuratorWorkflows(curator: DualPassCurator, cards: SliceC
         cost += a.costUsd;
         if (!a.ok) {
           return {
-            ...base,
-            status: 'ABORTED',
-            version,
+            ...idle('ABORTED', `agent A ${a.outcome}: ${a.detail}`),
             rounds: round,
-            validatorErrors: [],
-            gate: null,
             agentA,
             agentB,
             agentBCalls,
             costUsd: cost,
-            abortReason: `agent A ${a.outcome}: ${a.detail}`,
           };
         }
         agentA = { family: a.served.family, tier: a.served.tier };
         const validated: Validated = await step(`validate-${round}`, () =>
-          Promise.resolve(curator.validate(target, a.value, gathered, existing)),
+          Promise.resolve(curator.validate(target, a.value, gathered, context)),
         );
         const finish = async (
           mode: 'DEEP_VERIFIED' | 'QUARANTINE',
           gate: GateDecision,
-          report: VerificationReportOrNull,
+          report: VerificationReport | null,
         ): Promise<VerifyResult> => {
-          const outcome = await step('commit', () =>
+          const outcome: CommitOutcome = await step('commit', () =>
             curator.commit({
               target,
               mode,
@@ -169,7 +179,7 @@ export function registerCuratorWorkflows(curator: DualPassCurator, cards: SliceC
                   : `WF-03 ${workflowId}: ${gate.failures.join(',')}`,
             }),
           );
-          await publishCards(outcome);
+          await step('cache-cards', () => cards.publish(outcome.materialized));
           return {
             workflowId,
             status: outcome.status,
@@ -207,17 +217,13 @@ export function registerCuratorWorkflows(curator: DualPassCurator, cards: SliceC
         cost += b.costUsd;
         if (!b.ok) {
           return {
-            ...base,
-            status: 'ABORTED',
-            version,
+            ...idle('ABORTED', `agent B ${b.outcome}: ${b.detail}`),
             rounds: round,
             validatorErrors: validated.errors,
-            gate: null,
             agentA,
             agentB,
             agentBCalls,
             costUsd: cost,
-            abortReason: `agent B ${b.outcome}: ${b.detail}`,
           };
         }
         agentB = { family: b.served.family, tier: b.served.tier };
@@ -242,60 +248,71 @@ export function registerCuratorWorkflows(curator: DualPassCurator, cards: SliceC
     ): Promise<BaselineResult> => {
       const workflowId = baselineWorkflowId(season, batchId);
       const results: BaselineTargetResult[] = [];
+      const skip = (
+        spec: BaselineTargetSpec,
+        status: VerifyStatus,
+        abortReason: string | null,
+      ): BaselineTargetResult => ({
+        targetKey: spec.targetKey,
+        nodeKey: spec.nodeKey,
+        status,
+        validatorErrors: [],
+        gate: null,
+        abortReason,
+      });
       for (const [i, spec] of targets.entries()) {
+        if (spec.nodeKey === null) {
+          results.push(
+            skip(spec, 'UNBOUND_TARGET', 'no node key bound to this target (ops must configure it)'),
+          );
+          continue;
+        }
+        const target: NodeTarget = {
+          layer: spec.layer,
+          nodeKey: spec.nodeKey,
+          season,
+          targetKey: spec.targetKey,
+          countryIso2: spec.countryIso2,
+        };
+        const context = await step(`load-context-${i}`, () => curator.loadContext(target));
+        if (context.existing?.depth === 'DEEP_VERIFIED') {
+          results.push(skip(spec, 'KEPT_DEEP_VERIFIED', null));
+          continue;
+        }
+        if (context.existing?.depth === 'QUARANTINED') {
+          results.push(skip(spec, 'KEPT_QUARANTINED', null)); // P2
+          continue;
+        }
         const gathered = await step(`gather-${i}`, () =>
           curator.gather(spec.targetKey, `${workflowId}:${i}`),
         );
-        const provisional: NodeTarget = {
-          layer: spec.layer,
-          nodeKey: spec.nodeKey ?? '',
-          season,
-          targetKey: spec.targetKey,
-        };
         const a = await step(`extract-${i}`, () =>
-          curator.extract('RTE-wiki.baseline_extract', provisional, gathered, null, {
+          curator.extract('RTE-wiki.baseline_extract', target, gathered, null, {
             idempotencyKey: `${workflowId}:${i}:extract`,
             callKey: `baseline:${spec.targetKey}:${workflowId}`,
           }),
         );
         if (!a.ok) {
-          results.push({
-            targetKey: spec.targetKey,
-            nodeKey: spec.nodeKey,
-            status: 'ABORTED',
-            validatorErrors: [],
-            abortReason: `${a.outcome}: ${a.detail}`,
-          });
-          continue;
-        }
-        const target: NodeTarget = { ...provisional, nodeKey: spec.nodeKey ?? a.value.node_key };
-        const existing = await step(`load-existing-${i}`, () =>
-          curator.loadExisting(target.layer, target.nodeKey),
-        );
-        if (existing?.depth === 'DEEP_VERIFIED') {
-          results.push({
-            targetKey: spec.targetKey,
-            nodeKey: target.nodeKey,
-            status: 'KEPT_DEEP_VERIFIED',
-            validatorErrors: [],
-            abortReason: null,
-          });
+          results.push(skip(spec, 'ABORTED', `${a.outcome}: ${a.detail}`));
           continue;
         }
         const validated = await step(`validate-${i}`, () =>
-          Promise.resolve(curator.validate(target, a.value, gathered, existing)),
+          Promise.resolve(curator.validate(target, a.value, gathered, context)),
         );
-        const ok = validated.errors.length === 0 && validated.fields !== null;
+        // P1: the deterministic gate (citations on every required path, no required abstention)
+        const gate = baselineGateDecision(target, validated, a.value);
         const outcome = await step(`commit-${i}`, () =>
           curator.commit({
             target,
-            mode: ok ? 'BASELINE' : 'QUARANTINE',
-            expectedVersion: existing?.version ?? 0,
+            mode: gate.pass ? 'BASELINE' : 'QUARANTINE',
+            expectedVersion: context.existing?.version ?? 0,
             proposal: a.value,
             validated,
             report: null,
             gathered,
-            reason: ok ? `WF-19 ${workflowId}: baseline` : `WF-19 ${workflowId}: validator rejected`,
+            reason: gate.pass
+              ? `WF-19 ${workflowId}: baseline`
+              : `WF-19 ${workflowId}: ${gate.failures.join(',')}`,
           }),
         );
         await step(`cache-cards-${i}`, () => cards.publish(outcome.materialized));
@@ -304,6 +321,7 @@ export function registerCuratorWorkflows(curator: DualPassCurator, cards: SliceC
           nodeKey: target.nodeKey,
           status: outcome.status,
           validatorErrors: validated.errors,
+          gate,
           abortReason: null,
         });
       }
@@ -330,5 +348,3 @@ export function registerCuratorWorkflows(curator: DualPassCurator, cards: SliceC
     },
   };
 }
-
-type VerificationReportOrNull = Parameters<DualPassCurator['commit']>[0]['report'];

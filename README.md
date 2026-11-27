@@ -25,9 +25,23 @@ pnpm --filter @prometheus/wiki-curator build-baseline --season 2027-FALL --batch
 pnpm --filter @prometheus/core start                 # POST /api/v1/dev/match on 127.0.0.1:8787
 ```
 
+Wiki evidence rules (review cycle 2, coordinator rulings P1/P2):
+
+- **AI-curated rows** (WF-03, WF-19): every required path of the layer must be backed by a validator-passing
+  verbatim citation (exact, ancestor or descendant path), and no required path may be abstained; otherwise the row
+  is never matchable (`program_season_spec` not ACTIVE; other layers QUARANTINED). Identity (node key, country,
+  parent university, origin keys) is bound to the crawl target, and a model can never emit the `**` wildcard.
+- **Golden rows** keep the Architect-ruled evidence: each uncited required path is listed with its ruling in
+  `golden-mapping.ts` (`rulingCovered`), recorded as `evidence_basis = ARCHITECT_RULING` in the revision. A new
+  uncited path fails the import.
+- **Quarantine is sticky**: no workflow re-activates a QUARANTINED node (human/ops clearance only).
+- `build-baseline` only processes targets with a bound node key (PROGRAM targets, or `--target` plus
+  `--node-key`); other targets report `UNBOUND_TARGET`.
+
 T2 environment (defaults applied by `scripts/env.mjs`): `AI_MODE` (`replay` | `live`; live keys come from
 `.secrets/openai_api_key` / `gemini_api_key`), `AI_CASSETTE_DIR` (`<repo>/cassettes`), `VALKEY_URL`,
-`CORE_HTTP_PORT` (8787), `MATCHING_EMBEDDINGS` (`off`). `pnpm db:migrate` also provisions the DBOS system schema
+`CORE_HTTP_PORT` (8787), `MATCHING_EMBEDDINGS` (`off`), `OPENAI_PII_EU_HOSTS` (EU endpoint hosts allowed to
+receive applicant data; default none), `PG_SSLMODE` (`disable` locally, `verify-full` elsewhere). `pnpm db:migrate` also provisions the DBOS system schema
 `dbos` with the migrator role (runtime roles never run DDL).
 
 ## Layout

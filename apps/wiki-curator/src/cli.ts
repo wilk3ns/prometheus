@@ -116,15 +116,15 @@ async function main(argv: readonly string[]): Promise<void> {
       const target = await runtime.repo.findTargetByKey(targetKey);
       if (!target) throw new UsageError(`unknown target_key ${targetKey}`);
       const layer = layerForHint(target.layerHint);
-      const nodeKey = values['node-key'] ?? (layer === 'PROGRAM_SPEC' ? targetKey : undefined);
-      if (nodeKey === undefined) throw new UsageError(`${layer} targets need --node-key`);
+      // HIGH-2: the node is bound to the target (PROGRAM: its key) or named by ops (--node-key); never by a model
+      const nodeKey = bindNodeKey(layer, targetKey, values['node-key']);
       const season = AdmissionSeason.parse(values.season ?? nodeKey.slice(nodeKey.lastIndexOf(':') + 1));
       const router = await openModelRouter(runtime, loadAiConfig(process.env));
       const durable = await openDurableCurator(runtime, services, router);
       try {
         const existing = await services.layers.findNode(layer, nodeKey);
         const result = await durable.workflows.verify(
-          { layer, nodeKey, season, targetKey },
+          { layer, nodeKey, season, targetKey, countryIso2: target.countryIso2 },
           existing?.version ?? 0,
         );
         console.log(JSON.stringify({ command: 'verify-target', ...result, cards: result.cards.length }));
@@ -149,7 +149,11 @@ async function main(argv: readonly string[]): Promise<void> {
       if (rows.length === 0) throw new UsageError('no crawl targets selected');
       const specs: BaselineTargetSpec[] = rows.map((t) => {
         const layer = layerForHint(t.layerHint);
-        return { targetKey: t.targetKey, layer, nodeKey: layer === 'PROGRAM_SPEC' ? t.targetKey : null };
+        // a single explicit target may carry an ops-supplied --node-key; unbound targets are skipped by WF-19
+        const opsKey = values.target === undefined ? undefined : values['node-key'];
+        const nodeKey =
+          layer === 'PROGRAM_SPEC' || opsKey !== undefined ? bindNodeKey(layer, t.targetKey, opsKey) : null;
+        return { targetKey: t.targetKey, layer, nodeKey, countryIso2: t.countryIso2 };
       });
       const router = await openModelRouter(runtime, loadAiConfig(process.env));
       const durable = await openDurableCurator(runtime, services, router);
@@ -165,6 +169,18 @@ async function main(argv: readonly string[]): Promise<void> {
   }
 
   throw new UsageError(`unknown command ${command ?? ''}`);
+}
+
+/** PROGRAM targets are keyed like their node; other layers need an ops-supplied key. */
+function bindNodeKey(layer: string, targetKey: string, opsKey: string | undefined): string {
+  if (layer === 'PROGRAM_SPEC') {
+    if (opsKey !== undefined && opsKey !== targetKey) {
+      throw new UsageError(`PROGRAM targets are bound to their own key ${targetKey}`);
+    }
+    return targetKey;
+  }
+  if (opsKey === undefined) throw new UsageError(`${layer} targets need an ops-supplied --node-key`);
+  return opsKey;
 }
 
 async function withWiki(

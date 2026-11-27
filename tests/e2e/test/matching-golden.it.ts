@@ -40,6 +40,17 @@ describe('[T2-G6][T2-G7] golden import -> 8 Slice Cards -> $0 matching (Profiles
     await curator?.close();
   });
 
+  it('P1 golden provenance: every golden revision records evidence_basis ARCHITECT_RULING', async () => {
+    const revs = await curator.db
+      .selectFrom('wiki.node_revision')
+      .select(['node_key', 'after_json'])
+      .where('actor', '=', 'GOLDEN_FIXTURE')
+      .execute();
+    expect(revs.length).toBeGreaterThanOrEqual(18);
+    for (const r of revs)
+      expect(r.after_json, r.node_key).toMatchObject({ evidence_basis: 'ARCHITECT_RULING' });
+  });
+
   it('Gate 6: all 8 primary cards (docs, tuition_aid, city, dorms x 2) exist, <= 350 tokens, in PG and Valkey < 5 ms', async () => {
     const wanted = [
       'docs:polimi:msc-cse',
@@ -54,12 +65,20 @@ describe('[T2-G6][T2-G7] golden import -> 8 Slice Cards -> $0 matching (Profiles
     const keys = new Set(cards.map((c) => `${c.kind}:${c.node_id}`));
     for (const w of wanted) expect(keys.has(w), w).toBe(true);
     for (const c of cards) expect(c.est_tokens).toBeLessThanOrEqual(350);
+    // LOW-7: p95 over 20 reads per card (a single sample is flaky on a loaded runner)
+    const samples: number[] = [];
     for (const c of cards.filter((x) => wanted.includes(`${x.kind}:${x.node_id}`))) {
-      const t = performance.now();
-      const got = await services.cards.get({ kind: c.kind, nodeId: c.node_id, season: c.season });
-      expect(performance.now() - t).toBeLessThan(5);
-      expect(got).toEqual(c);
+      for (let i = 0; i < 20; i += 1) {
+        const t = performance.now();
+        const got = await services.cards.get({ kind: c.kind, nodeId: c.node_id, season: c.season });
+        samples.push(performance.now() - t);
+        expect(got).toEqual(c);
+      }
     }
+    samples.sort((a, b) => a - b);
+    const p95 = samples[Math.floor(samples.length * 0.95)] ?? Infinity;
+    console.log(`[T2-G6] golden Valkey card reads: p95 ${p95.toFixed(3)} ms (n=${samples.length})`);
+    expect(p95).toBeLessThan(5);
   });
 
   for (const p of loadGate7Profiles()) {

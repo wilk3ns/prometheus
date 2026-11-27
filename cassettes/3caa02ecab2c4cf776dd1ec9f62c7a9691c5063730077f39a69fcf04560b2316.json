@@ -1,11 +1,11 @@
 {
-  "key": "6d8d3788842eb008bc99065acfd8252d16184760657b598947e19aa0e6029b86",
+  "key": "3caa02ecab2c4cf776dd1ec9f62c7a9691c5063730077f39a69fcf04560b2316",
   "material": {
     "route": "RTE-wiki.deep_verify",
-    "promptHash": "205d8a3ee45c8b8e10373d3728b9320b560166584e1c3e293ef596a1d5d062a4",
+    "promptHash": "192e93c82259d2fd901a58620b364ea389b8b194f4fcf131affdbf2d2ca42ea6",
     "tier": "oa.flagship",
     "excludeFamily": "google-gemini",
-    "inputHash": "e9a7aeef7d40f425a94c94a2927e7c3b2903c4fa8e5e80396535e02fa5e042d6"
+    "inputHash": "c93a70d8472934e5c5ba4febd5aeac5814d1ddb910f7ec20ae13b27901391aed"
   },
   "note": "curator-verify locked round 1: Agent B (deep_verify, oa.flagship, excludes google-gemini)",
   "response": {

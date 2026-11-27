@@ -22,6 +22,7 @@ export interface CoreRuntime {
   readonly matching: MatchService;
   readonly programs: ProgramListingPort;
   readonly clock: ClockPort;
+  readonly devEndpoints: boolean;
   close(): Promise<void>;
 }
 
@@ -45,5 +46,12 @@ export async function openCoreRuntime(config: CoreConfig, ai: AiConfig): Promise
     triage: new RouterTriage(router),
     clock,
   });
-  return { db, matching, programs: catalog, clock, close: () => db.destroy() };
+  return {
+    db,
+    matching,
+    programs: catalog,
+    clock,
+    devEndpoints: config.devEndpoints,
+    close: () => db.destroy(),
+  };
 }
